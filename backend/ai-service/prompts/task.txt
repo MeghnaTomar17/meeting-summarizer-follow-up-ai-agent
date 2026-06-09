@@ -1,0 +1,11 @@
+# Task extraction prompt template
+# Service ownership: ai-service — TaskAgent
+# TODO: Structured JSON schema for action items
+
+Extract action items from the meeting below.
+
+Transcript:
+{{transcript}}
+
+Summary (optional):
+{{summary}}

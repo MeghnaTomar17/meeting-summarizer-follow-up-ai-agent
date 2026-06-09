@@ -1,0 +1,33 @@
+# MannerAI Meetings Platform — local and build artifacts
+# Service ownership: Repository root
+
+.env
+.env.local
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+.DS_Store
+Thumbs.db
+*.log
+.coverage
+htmlcov/
+
+.idea/
+.vscode/
+*.swp
+
+# Docker volumes
+data/
+volumes/

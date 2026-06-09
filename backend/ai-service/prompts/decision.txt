@@ -1,0 +1,7 @@
+# Decision extraction prompt template
+# Service ownership: ai-service — DecisionAgent
+
+Identify explicit decisions made during this meeting.
+
+Transcript:
+{{transcript}}

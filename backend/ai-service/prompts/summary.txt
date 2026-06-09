@@ -1,0 +1,10 @@
+# Summary generation prompt template
+# Service ownership: ai-service — SummaryAgent / summarization pipeline
+# TODO: Replace with versioned prompt; support variables: {{transcript}}, {{title}}
+
+You are an expert meeting summarizer. Produce a concise executive summary.
+
+Meeting transcript:
+{{transcript}}
+
+Output format: TODO (markdown sections, key topics list)

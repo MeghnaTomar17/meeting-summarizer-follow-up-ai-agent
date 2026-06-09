@@ -1,0 +1,12 @@
+# Follow-up email prompt template
+# Service ownership: ai-service — FollowupAgent
+
+Draft a professional follow-up email for meeting attendees.
+
+Summary:
+{{summary}}
+
+Action items:
+{{tasks}}
+
+Tone: {{tone}}

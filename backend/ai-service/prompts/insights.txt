@@ -1,0 +1,10 @@
+# Meeting insights prompt template
+# Service ownership: ai-service — InsightAgent
+
+Analyze the meeting for analytics: participation balance, sentiment, themes.
+
+Transcript:
+{{transcript}}
+
+Metadata:
+{{metadata}}
