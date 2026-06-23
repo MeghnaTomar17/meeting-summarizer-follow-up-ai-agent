@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from shared.utils.health import health_payload
+
 app = FastAPI(
     title="MannerAI AI Service",
     version="0.1.0",
@@ -20,4 +22,14 @@ app = FastAPI(
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "ai-service"}
+    return health_payload("ai-service", version=app.version)
+
+
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return health_payload("ai-service", version=app.version)
+
+
+@app.get("/health/ready")
+async def health_ready() -> dict[str, str]:
+    return health_payload("ai-service", version=app.version)

@@ -1,8 +1,12 @@
 # MannerAI Meetings Platform — local and build artifacts
-# Service ownership: Repository root
 
+# Secrets and local env (never commit)
 .env
 .env.local
+.env.*.local
+!.env.example
+
+# Python
 *.pyc
 __pycache__/
 .pytest_cache/
@@ -13,21 +17,33 @@ venv/
 dist/
 build/
 *.egg-info/
+*.egg
+pip-wheel-metadata/
 
+# Node / frontend (Phase 6+)
 node_modules/
 frontend/dist/
 frontend/.vite/
 
+# OS and editor
 .DS_Store
 Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# Test and coverage
 *.log
 .coverage
 htmlcov/
+.tox/
 
-.idea/
-.vscode/
-*.swp
-
-# Docker volumes
+# Docker local data
 data/
 volumes/
+
+# Cursor / local IDE state (optional local-only files)
+.cursor/

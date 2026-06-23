@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from shared.utils.health import health_payload
+
 app = FastAPI(
     title="MannerAI Gateway Service",
     version="0.1.0",
@@ -21,5 +23,17 @@ app = FastAPI(
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Liveness probe placeholder."""
-    return {"status": "ok", "service": "gateway-service"}
+    """Liveness probe for Docker and load balancers."""
+    return health_payload("gateway-service", version=app.version)
+
+
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    """Kubernetes-style liveness probe."""
+    return health_payload("gateway-service", version=app.version)
+
+
+@app.get("/health/ready")
+async def health_ready() -> dict[str, str]:
+    """Readiness probe — dependency checks added in Phase 2."""
+    return health_payload("gateway-service", version=app.version)

@@ -1,103 +1,232 @@
-# MannerAI Meetings Platform — Docker Compose (placeholder)
-# TODO: Wire healthchecks, networks, volumes, and service dependencies.
+# MannerAI Meetings Platform — local development stack
+# Venv dev: run only data stores → docker compose up -d postgres redis qdrant
+# Full stack (test at end): docker compose up --build
 
-version: "3.9"
+name: mannerai-meetings
+
+x-docker-service-env: &docker-service-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-mannerai_meetings}
+  REDIS_URL: redis://redis:6379/0
+  QDRANT_URL: http://qdrant:6333
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  MEETING_SERVICE_URL: http://meeting-service:8001
+  AI_SERVICE_URL: http://ai-service:8002
+  SEARCH_SERVICE_URL: http://search-service:8003
+  WORKER_SERVICE_URL: http://worker-service:8004
 
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: mannerai-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: mannerai_meetings
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-mannerai_meetings}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mannerai-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d mannerai_meetings"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-mannerai_meetings}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    container_name: mannerai-redis
+    command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.5
+    container_name: mannerai-qdrant
     ports:
-      - "6333:6333"
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
 
   gateway-service:
     build:
       context: .
       dockerfile: infrastructure/docker/gateway.Dockerfile
+    container_name: mannerai-gateway
     env_file: .env
+    environment:
+      <<: *docker-service-env
+      APP_ENV: ${APP_ENV:-development}
     ports:
-      - "8000:8000"
+      - "${GATEWAY_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
 
   meeting-service:
     build:
       context: .
       dockerfile: infrastructure/docker/meeting.Dockerfile
+    container_name: mannerai-meeting
     env_file: .env
+    environment:
+      <<: *docker-service-env
+      APP_ENV: ${APP_ENV:-development}
     ports:
-      - "8001:8001"
+      - "${MEETING_SERVICE_PORT:-8001}:8001"
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
 
   ai-service:
     build:
       context: .
       dockerfile: infrastructure/docker/ai.Dockerfile
+    container_name: mannerai-ai
     env_file: .env
+    environment:
+      <<: *docker-service-env
+      APP_ENV: ${APP_ENV:-development}
     ports:
-      - "8002:8002"
+      - "${AI_SERVICE_PORT:-8002}:8002"
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
 
   search-service:
     build:
       context: .
       dockerfile: infrastructure/docker/search.Dockerfile
+    container_name: mannerai-search
     env_file: .env
+    environment:
+      <<: *docker-service-env
+      APP_ENV: ${APP_ENV:-development}
     ports:
-      - "8003:8003"
+      - "${SEARCH_SERVICE_PORT:-8003}:8003"
     depends_on:
       qdrant:
-        condition: service_started
+        condition: service_healthy
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
 
   worker-service:
     build:
       context: .
       dockerfile: infrastructure/docker/worker.Dockerfile
+    container_name: mannerai-worker
     env_file: .env
+    environment:
+      <<: *docker-service-env
+      APP_ENV: ${APP_ENV:-development}
+    ports:
+      - "${WORKER_SERVICE_PORT:-8004}:8004"
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
 
   nginx:
-    image: nginx:alpine
+    image: nginx:1.27-alpine
+    container_name: mannerai-nginx
     ports:
-      - "80:80"
+      - "${NGINX_HTTP_PORT:-80}:80"
     volumes:
       - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - gateway-service
+      gateway-service:
+        condition: service_healthy
+    networks:
+      - mannerai-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  mannerai-network:
+    name: mannerai-network
+    driver: bridge
 
 volumes:
   postgres_data:
+  redis_data:
   qdrant_data:
