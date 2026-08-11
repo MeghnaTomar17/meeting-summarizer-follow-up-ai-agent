@@ -23,9 +23,3 @@ QDRANT_COLLECTION_MEETING_CHUNKS = "meeting_chunks"
 QUEUE_AI_PROCESSING = "ai.processing"
 QUEUE_EMBEDDINGS = "embeddings"
 QUEUE_EMAIL = "email"
-
-# Meeting processing statuses
-MEETING_STATUS_PENDING = "pending"
-MEETING_STATUS_PROCESSING = "processing"
-MEETING_STATUS_READY = "ready"
-MEETING_STATUS_FAILED = "failed"

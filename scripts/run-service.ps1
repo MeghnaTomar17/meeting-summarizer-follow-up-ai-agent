@@ -21,9 +21,9 @@ $env:PYTHONPATH = Join-Path $Root "backend"
 $services = @{
     gateway = @{ Dir = "backend\gateway-service"; Module = "app.main:app"; Port = 8000 }
     meeting = @{ Dir = "backend\meeting-service"; Module = "app.main:app"; Port = 8001 }
-    ai      = @{ Dir = "backend\ai-service";      Module = "main:app";      Port = 8002 }
-    search  = @{ Dir = "backend\search-service";  Module = "main:app";      Port = 8003 }
-    worker  = @{ Dir = "backend\worker-service";  Module = "main:app";      Port = 8004 }
+    ai      = @{ Dir = "backend\ai-service";      Module = "app.main:app"; Port = 8002 }
+    search  = @{ Dir = "backend\search-service";  Module = "app.main:app"; Port = 8003 }
+    worker  = @{ Dir = "backend\worker-service";  Module = "app.main:app"; Port = 8004 }
 }
 
 $config = $services[$Service]

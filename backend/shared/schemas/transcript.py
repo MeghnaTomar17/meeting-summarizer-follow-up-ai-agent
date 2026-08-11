@@ -1,6 +1,6 @@
 """
-Purpose: Transcript segment models.
-Future responsibilities: Store chunked transcript with speaker diarization metadata.
+Purpose: Transcript segment schemas.
+Future responsibilities: Store transcript with speaker diarization metadata.
 Service ownership: Shared (meeting-service, search-service).
 """
 
@@ -30,4 +30,5 @@ class TranscriptInDB(TranscriptBase):
     created_at: datetime
     updated_at: datetime
 
-    # TODO: raw_text, source (stt|upload), chunk_ids for vector index
+    # TODO: raw_text, source (stt|upload)
+    # TODO: chunk_ids — populated after search-service semantic chunking indexes vectors

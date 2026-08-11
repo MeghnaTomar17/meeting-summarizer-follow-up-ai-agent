@@ -16,7 +16,7 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 | Backend | FastAPI (microservices) |
 | Data | PostgreSQL, Redis, Qdrant |
 | AI | OpenAI, Gemini |
-| Workers | Celery, Redis Queue |
+| Workers | Celery, Redis |
 | Ops | Docker, Docker Compose, Nginx |
 
 ## Structure
@@ -115,7 +115,7 @@ Each service exposes:
 | meeting-service | 8001 | Meetings CRUD, uploads, transcripts, audio processing |
 | ai-service | 8002 | Agents, pipelines, LLM clients |
 | search-service | 8003 | Embeddings, semantic retrieval, vector search |
-| worker-service | 8004 | Celery/RQ background jobs (HTTP health in Phase 1; worker process in Phase 7) |
+| worker-service | 8004 | Celery background jobs (HTTP health in Phase 1; worker process in Phase 7) |
 
 ## Development
 
@@ -124,4 +124,4 @@ See `docs/architecture/` for system design (to be expanded).
 ## License
 
 TBD
-
+

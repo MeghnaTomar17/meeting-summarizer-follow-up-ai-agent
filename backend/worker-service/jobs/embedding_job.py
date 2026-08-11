@@ -1,5 +1,5 @@
 """
-Purpose: Celery task — chunk transcript and index embeddings in Qdrant.
+Purpose: Celery task — orchestrate semantic chunking (search-service) and index embeddings in Qdrant.
 Future responsibilities: Call search-service indexing APIs.
 Service ownership: worker-service.
 """

@@ -1,5 +1,5 @@
 """
-Purpose: Action item / task extracted from meetings.
+Purpose: Action item / task schema extracted from meetings.
 Future responsibilities: Assignee, due date, status workflow.
 Service ownership: Shared (ai-service, gateway-service).
 """

@@ -1,7 +1,7 @@
 """
-Purpose: Split transcripts into semantic chunks for embedding.
+Purpose: Split transcripts into semantic chunks for embedding and RAG.
 Future responsibilities: Token-aware chunking, overlap, metadata.
-Service ownership: meeting-service (feeds search-service / worker).
+Service ownership: search-service (Search/RAG processing layer).
 """
 
 from __future__ import annotations

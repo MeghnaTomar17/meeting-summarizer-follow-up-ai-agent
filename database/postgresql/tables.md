@@ -1,6 +1,6 @@
 # PostgreSQL Tables
 
-> Documentation only — ORM models in `backend/shared/database/models/` (TODO), API DTOs in `backend/shared/models/`.
+> Documentation only — ORM models in `backend/shared/database/models/` (TODO), API DTOs in `backend/shared/schemas/`.
 
 ## users
 

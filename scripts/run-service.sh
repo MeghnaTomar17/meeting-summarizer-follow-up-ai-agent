@@ -15,9 +15,9 @@ fi
 case "$SERVICE" in
   gateway) DIR="backend/gateway-service"; MODULE="app.main:app"; PORT=8000 ;;
   meeting) DIR="backend/meeting-service"; MODULE="app.main:app"; PORT=8001 ;;
-  ai)      DIR="backend/ai-service";      MODULE="main:app";      PORT=8002 ;;
-  search)  DIR="backend/search-service";  MODULE="main:app";      PORT=8003 ;;
-  worker)  DIR="backend/worker-service";  MODULE="main:app";      PORT=8004 ;;
+  ai)      DIR="backend/ai-service";      MODULE="app.main:app"; PORT=8002 ;;
+  search)  DIR="backend/search-service";  MODULE="app.main:app"; PORT=8003 ;;
+  worker)  DIR="backend/worker-service";  MODULE="app.main:app"; PORT=8004 ;;
   *)
     echo "Usage: $0 gateway|meeting|ai|search|worker" >&2
     exit 1

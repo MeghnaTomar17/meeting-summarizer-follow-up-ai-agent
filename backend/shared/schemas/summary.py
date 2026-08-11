@@ -1,5 +1,5 @@
 """
-Purpose: Meeting summary model produced by AI pipeline.
+Purpose: Meeting summary schema produced by AI pipeline.
 Future responsibilities: Versioned summaries, key topics, executive brief.
 Service ownership: Shared (ai-service, gateway-service).
 """

@@ -1,5 +1,5 @@
 """
-Purpose: Meeting aggregate model.
+Purpose: Meeting aggregate schema.
 Future responsibilities: CRUD, lifecycle status, participant links.
 Service ownership: Shared (meeting-service, gateway-service).
 """

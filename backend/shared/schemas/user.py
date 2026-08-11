@@ -1,5 +1,5 @@
 """
-Purpose: User domain model and API schemas.
+Purpose: User domain schema and API DTOs.
 Future responsibilities: Auth identity, roles, organization membership.
 Service ownership: Shared (gateway-service primary consumer).
 """

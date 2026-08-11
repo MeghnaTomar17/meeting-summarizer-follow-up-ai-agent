@@ -13,8 +13,8 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 | gateway-service | Auth, routing, validation, public API |
 | meeting-service | Meetings, uploads, transcripts, audio processing |
 | ai-service | Agents, LLM pipelines, prompts |
-| search-service | Embeddings, Qdrant retrieval |
-| worker-service | Async jobs (Celery/RQ) |
+| search-service | Chunking, embeddings, Qdrant retrieval |
+| worker-service | Async jobs (Celery) |
 
 ## Data stores
 
@@ -26,7 +26,7 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 
 - **SQLAlchemy 2.0 async** + **asyncpg** for PostgreSQL access
 - **Alembic** for schema migrations (see `database/postgresql/migrations.md`)
-- **Pydantic models** in `backend/shared/models/` for API/domain DTOs
+- **Pydantic schemas** in `backend/shared/schemas/` for shared API/domain DTOs
 - **SQLAlchemy ORM models** in `backend/shared/database/models/` (TODO)
 
 ## TODO
