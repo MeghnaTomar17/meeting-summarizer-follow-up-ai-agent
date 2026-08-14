@@ -8,13 +8,19 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from app.config.settings import get_settings
 from shared.utils.health import health_payload
+from shared.utils.service_bootstrap import init_service_logging, register_logging_middleware
+
+init_service_logging(get_settings)
 
 app = FastAPI(
     title="MannerAI AI Service",
     version="0.1.0",
     description="Agents, LLM pipelines, summarization and extraction.",
 )
+
+register_logging_middleware(app)
 
 # TODO: routes for on-demand processing (internal only)
 # TODO: restrict to service mesh / internal network

@@ -29,6 +29,13 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 - **Pydantic schemas** in `backend/shared/schemas/` for shared API/domain DTOs
 - **SQLAlchemy ORM models** in `backend/shared/database/models/` (TODO)
 
+## Logging
+
+- Centralized logging in `backend/shared/utils/` (see `docs/architecture/logging.md`)
+- Development/testing: human-readable logs
+- Production: JSON structured logs
+- Request correlation via `X-Request-ID`
+
 ## TODO
 
 - Sequence diagrams for upload → process → index flow

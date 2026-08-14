@@ -20,6 +20,7 @@ _INSECURE_JWT_SECRETS = frozenset(
 class GatewaySettings(SharedSettings):
     """Gateway-specific settings (auth + downstream service URLs)."""
 
+    service_name: str = "gateway-service"
     jwt_secret: SecretStr = Field(default=SecretStr(_DEV_JWT_SECRET))
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60

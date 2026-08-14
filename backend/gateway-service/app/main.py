@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from app.config.settings import get_settings
 from shared.utils.health import health_payload
+from shared.utils.service_bootstrap import init_service_logging, register_logging_middleware
+
+init_service_logging(get_settings)
 
 app = FastAPI(
     title="MannerAI Gateway Service",
@@ -16,8 +20,10 @@ app = FastAPI(
     description="Authentication, API routing, validation, analytics and integrations.",
 )
 
+register_logging_middleware(app)
+
 # TODO: include_router auth, users, meetings, search, analytics, integrations
-# TODO: CORS, rate limiting, request ID middleware
+# TODO: CORS, rate limiting
 # TODO: lifespan — postgres/redis init via shared.database
 
 

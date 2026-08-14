@@ -2,8 +2,15 @@
 
 from shared.config.base import SharedSettings, cached_settings_factory
 
-Settings = SharedSettings
 
-get_settings = cached_settings_factory(SharedSettings)
+class MeetingSettings(SharedSettings):
+    """Meeting service settings."""
 
-__all__ = ["Settings", "get_settings"]
+    service_name: str = "meeting-service"
+
+
+Settings = MeetingSettings
+
+get_settings = cached_settings_factory(MeetingSettings)
+
+__all__ = ["MeetingSettings", "Settings", "get_settings"]

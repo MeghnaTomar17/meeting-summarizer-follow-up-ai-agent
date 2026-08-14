@@ -10,6 +10,7 @@ from shared.config.base import SharedSettings, cached_settings_factory
 class AISettings(SharedSettings):
     """AI service-specific settings (LLM providers)."""
 
+    service_name: str = "ai-service"
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o-mini"
     gemini_api_key: SecretStr | None = None

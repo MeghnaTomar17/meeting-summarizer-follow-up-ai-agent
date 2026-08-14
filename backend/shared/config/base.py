@@ -78,8 +78,13 @@ class SharedSettings(BaseSettings):
 
     @field_validator("log_level")
     @classmethod
-    def normalize_log_level(cls, value: str) -> str:
-        return value.upper()
+    def validate_log_level(cls, value: str) -> str:
+        normalized = value.upper()
+        valid_levels = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+        if normalized not in valid_levels:
+            msg = f"Invalid LOG_LEVEL: {value!r}"
+            raise ValueError(msg)
+        return normalized
 
     @classmethod
     def settings_customise_sources(
