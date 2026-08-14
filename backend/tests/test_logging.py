@@ -35,6 +35,7 @@ from shared.utils.logger import (  # noqa: E402
     log_event,
     resolve_log_level,
 )
+from shared.utils.service_bootstrap import register_exception_handlers  # noqa: E402
 
 
 def _capture_logs() -> tuple[logging.Handler, io.StringIO]:
@@ -208,26 +209,36 @@ class LoggingTestCase(unittest.TestCase):
     def test_exception_retains_traceback(self) -> None:
         app = FastAPI()
         app.add_middleware(RequestLoggingMiddleware)
+        register_exception_handlers(app)
 
         @app.get("/boom")
-        async def boom() -> PlainTextResponse:
+        async def boom() -> None:
             raise RuntimeError("boom")
 
-        handler, stream = _capture_logs()
+        stream = io.StringIO()
         configure_logging(
             service_name="gateway-service",
             log_level="INFO",
             app_env=AppEnv.DEVELOPMENT,
         )
-        logging.getLogger("shared.middleware.request_logging").addHandler(handler)
+        handler_logger = logging.getLogger("shared.exceptions.handlers")
+        stream_handler = logging.StreamHandler(stream)
+        handler_logger.addHandler(stream_handler)
+        handler_logger.setLevel(logging.DEBUG)
 
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/boom")
-        self.assertEqual(response.status_code, 500)
-        output = stream.getvalue()
-        self.assertIn("request_failed", output)
-        self.assertIn("RuntimeError", output)
-        self.assertIn("Traceback", output)
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/boom")
+            self.assertEqual(response.status_code, 500)
+            output = stream.getvalue()
+            self.assertIn("unhandled_exception", output)
+            self.assertIn("RuntimeError", output)
+            self.assertIn("Traceback", output)
+            body = response.json()
+            self.assertEqual(body["error"]["code"], "INTERNAL_SERVER_ERROR")
+            self.assertNotIn("boom", json.dumps(body))
+        finally:
+            handler_logger.removeHandler(stream_handler)
 
     def test_sensitive_fields_not_logged_by_policy(self) -> None:
         self.assertTrue(is_sensitive_log_field("authorization"))

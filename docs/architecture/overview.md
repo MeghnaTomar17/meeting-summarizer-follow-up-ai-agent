@@ -36,6 +36,12 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 - Production: JSON structured logs
 - Request correlation via `X-Request-ID`
 
+## Exception handling
+
+- Standardized error envelope in `backend/shared/exceptions/` (see `docs/architecture/exceptions.md`)
+- Shared FastAPI exception handlers registered via service bootstrap
+- Safe client-facing errors; tracebacks logged server-side only
+
 ## TODO
 
 - Sequence diagrams for upload → process → index flow
