@@ -18,8 +18,15 @@
 | Redis      | Cache, sessions, Celery broker            |
 | Qdrant     | Semantic search over transcript chunks    |
 
+## PostgreSQL foundation (Phase 2.5)
+
+- Async engine/session in `backend/shared/database/`
+- Alembic at repository root (`alembic.ini`, `backend/migrations/`)
+- meeting-service integrates database lifespan and readiness
+- See [`docs/architecture/database.md`](../architecture/database.md)
+
 ## TODO
 
-- Initialize Alembic and first migration revision
+- First Alembic revision when ORM business models are implemented
 - Backup and restore runbooks (pg_dump / point-in-time recovery)
 - Data retention and soft-delete policies

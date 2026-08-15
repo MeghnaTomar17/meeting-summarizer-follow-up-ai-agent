@@ -1,3 +1,9 @@
-"""SQLAlchemy ORM models — map to PostgreSQL tables (see database/postgresql/tables.md)."""
+"""
+SQLAlchemy ORM models — map to PostgreSQL tables (see database/postgresql/tables.md).
 
-# TODO: Define User, Organization, Meeting, Transcript, Summary, Task, Decision, Followup ORM models
+Import future model modules here so Alembic metadata discovery remains complete.
+"""
+
+from shared.database.base import Base
+
+__all__ = ["Base"]

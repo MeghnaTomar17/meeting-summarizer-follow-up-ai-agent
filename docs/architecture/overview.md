@@ -48,6 +48,13 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 - Internal services use unversioned routes
 - Pagination, naming, and response conventions documented in Phase 2.4
 
+## Database
+
+- Async SQLAlchemy 2.x + asyncpg (see `docs/architecture/database.md`)
+- Shared infrastructure in `backend/shared/database/`
+- Alembic migrations at `backend/migrations/`
+- meeting-service owns PostgreSQL connectivity in Phase 2.5
+
 ## TODO
 
 - Sequence diagrams for upload → process → index flow

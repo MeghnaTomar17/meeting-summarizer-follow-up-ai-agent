@@ -6,10 +6,8 @@ Service ownership: Shared module.
 
 from __future__ import annotations
 
-# TODO: from sqlalchemy.orm import DeclarativeBase
-#
-# class Base(DeclarativeBase):
-#     """SQLAlchemy ORM base — map tables in shared/database/models/."""
-#     pass
+from sqlalchemy.orm import DeclarativeBase
 
-Base = None  # placeholder until ORM models are implemented
+
+class Base(DeclarativeBase):
+    """Canonical SQLAlchemy ORM base for all persistent models."""

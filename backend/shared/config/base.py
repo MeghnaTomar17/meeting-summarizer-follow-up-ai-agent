@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TypeVar
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -71,7 +71,10 @@ class SharedSettings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/mannerai_meetings"
     )
-    database_pool_size: int = 10
+    database_pool_size: int = Field(default=10, ge=1)
+    database_max_overflow: int = Field(default=10, ge=0)
+    database_pool_timeout: int = Field(default=30, ge=1)
+    database_pool_recycle: int = Field(default=1800, ge=0)
     database_echo: bool = False
 
     redis_url: str = "redis://localhost:6379/0"
