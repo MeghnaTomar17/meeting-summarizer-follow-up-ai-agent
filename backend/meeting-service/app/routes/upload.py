@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/upload", tags=["upload"])
+router = APIRouter(prefix="/meetings", tags=["upload"])
 
-# TODO: POST /{meeting_id}/audio
-# TODO: POST /{meeting_id}/transcript
-# TODO: GET /{meeting_id}/status
+# TODO: POST /{meeting_id}/upload/audio
+# TODO: POST /{meeting_id}/upload/transcript
+# TODO: GET /{meeting_id}/upload/status

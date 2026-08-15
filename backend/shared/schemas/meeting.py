@@ -42,5 +42,10 @@ class MeetingInDB(MeetingBase):
     # TODO: recording_url, duration_seconds, source (upload|calendar|zoom)
 
 
-class MeetingPublic(MeetingInDB):
-    pass
+class MeetingPublic(MeetingBase):
+    """Client-safe meeting representation — excludes internal ownership fields."""
+
+    id: str
+    status: MeetingStatus = MeetingStatus.PENDING
+    created_at: datetime
+    updated_at: datetime

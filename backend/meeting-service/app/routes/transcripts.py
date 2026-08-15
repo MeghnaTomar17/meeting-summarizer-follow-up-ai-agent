@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/transcripts", tags=["transcripts"])
+router = APIRouter(prefix="/meetings", tags=["transcripts"])
 
-# TODO: GET /{meeting_id}
-# TODO: PUT /{meeting_id} — replace segments after processing
+# TODO: GET /{meeting_id}/transcript
+# TODO: PUT /{meeting_id}/transcript — replace segments after processing

@@ -8,8 +8,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from shared.exceptions.base import AppError
@@ -66,7 +67,9 @@ def _build_error_response(
     return response
 
 
-def _http_exception_message(detail: Any) -> str:
+def _http_exception_message(detail: Any, status_code: int) -> str:
+    if status_code == 404 and (detail is None or detail == "Not Found"):
+        return "Resource not found."
     if isinstance(detail, str):
         return detail
     if isinstance(detail, list) and detail:
@@ -150,10 +153,13 @@ async def request_validation_error_handler(
     )
 
 
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+async def http_exception_handler(
+    request: Request,
+    exc: StarletteHTTPException,
+) -> JSONResponse:
     request_id = _resolve_request_id(request)
     code = _STATUS_TO_CODE.get(exc.status_code, f"HTTP_ERROR_{exc.status_code}")
-    message = _http_exception_message(exc.detail)
+    message = _http_exception_message(exc.detail, exc.status_code)
     logger.info(
         "http_exception",
         extra={
@@ -195,5 +201,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     """Register shared exception handlers on a FastAPI application."""
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(RequestValidationError, request_validation_error_handler)
-    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

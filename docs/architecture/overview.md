@@ -42,6 +42,12 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 - Shared FastAPI exception handlers registered via service bootstrap
 - Safe client-facing errors; tracebacks logged server-side only
 
+## API design
+
+- Public API versioned at `/api/v1` on the gateway (see `docs/architecture/api-design.md`)
+- Internal services use unversioned routes
+- Pagination, naming, and response conventions documented in Phase 2.4
+
 ## TODO
 
 - Sequence diagrams for upload → process → index flow

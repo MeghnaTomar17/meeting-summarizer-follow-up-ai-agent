@@ -27,7 +27,7 @@ app = FastAPI(
 register_logging_middleware(app)
 register_exception_handlers(app)
 
-# TODO: include_router from routes/
+# TODO: include_router from app.routes/
 
 
 @app.get("/health")
