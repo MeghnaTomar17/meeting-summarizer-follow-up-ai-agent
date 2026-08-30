@@ -2,6 +2,8 @@
 
 > MannerAI Meetings Platform — scaffolding documentation.
 
+**Entry point:** For the consolidated foundation reference covering Phases 2.1–2.5, see [project-foundation.md](./project-foundation.md).
+
 ## System context
 
 The platform ingests meeting recordings and transcripts, runs AI pipelines for summaries and extractions, indexes content for semantic search, and exposes a React dashboard via an API gateway.
