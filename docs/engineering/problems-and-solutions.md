@@ -1,6 +1,6 @@
 # Engineering Problems and Solutions
 
-This is a factual record of meaningful issues encountered through Phase 3.3.
+This is a factual record of meaningful issues encountered through Phase 3.4.
 It complements the current architecture documents; it does not turn deferred
 design choices into completed work.
 
@@ -249,3 +249,73 @@ that reachable local instance without assuming Docker ownership.
 “I verified the real connection instead of inferring infrastructure state from
 the compose file. A configured port describes an intended path; connectivity
 checks establish what is actually available.”
+
+## PS-010 — Phase 3.4 route-test import-path setup
+
+### Problem
+
+The new meeting-route test initially could not import `shared` when run directly.
+
+### Why it happened
+
+Tests execute from the repository root, while `shared` is rooted under
+`backend`. Existing meeting repository/service tests already establish that
+`backend` must be placed on Python's import path.
+
+### How we diagnosed it
+
+The focused `unittest` run failed before test execution with
+`ModuleNotFoundError: No module named 'shared'`. Comparing the new test with the
+existing meeting tests showed the missing `BACKEND_ROOT` path insertion.
+
+### Solution
+
+The route test adds `BACKEND_ROOT` to `sys.path` before importing shared modules,
+matching the established project test convention.
+
+### Why that solution was chosen
+
+It scopes import setup to the test harness and leaves application import
+boundaries unchanged.
+
+### What I learned / interview explanation
+
+“A test runner's working directory is part of the test environment. I aligned
+the new test with the repository's existing backend-package setup instead of
+changing application imports to accommodate one test command.”
+
+## PS-011 — Route adapter validation without PostgreSQL
+
+### Problem / architectural decision
+
+Phase 3.4 needed to prove HTTP routing, dependency composition, DTO
+serialization, and error propagation without duplicating database tests or
+requiring a running PostgreSQL instance.
+
+### How we diagnosed the appropriate boundary
+
+The route handlers only delegate to `MeetingService`; repository and service
+layers already have their own mock-based tests. FastAPI supports replacing a
+dependency for an individual test application.
+
+### Solution
+
+Production resolves `get_meeting_service`, which resolves `get_db_session` and
+constructs repositories/service. Route tests override `get_meeting_service` to
+inject an `AsyncMock`/`MagicMock` service, then use `TestClient` to make real
+HTTP requests to the application.
+
+### Why that solution was chosen
+
+It isolates the HTTP adapter: tests verify the router is mounted, POST returns
+201 and serializes `MeetingPublic`, GET forwards the ID, and existing exception
+handlers emit standardized 404/422 responses. It does not falsely claim to
+validate PostgreSQL behavior; the opt-in integration test remains the real
+database check.
+
+### What I learned / interview explanation
+
+“Dependency overrides let me test the route contract at the service boundary.
+I can exercise FastAPI validation, response models, and centralized errors with
+no database, while retaining separate repository/service and integration tests
+for lower layers.”

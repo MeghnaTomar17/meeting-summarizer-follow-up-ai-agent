@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — current architecture through Phase 3.3.
+> MannerAI Meetings Platform — current architecture through Phase 3.4.
 
 **Entry point:** For the consolidated foundation reference covering Phases 2.1–2.5, see [project-foundation.md](./project-foundation.md).
 
@@ -59,10 +59,10 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 
 ## Current meeting persistence boundary
 
-Phase 3.1–3.3 implemented the internal persistence path:
+Phase 3.1–3.4 implemented the internal meeting persistence and route path:
 
 ```
-Route (not wired yet)
+POST /meetings or GET /meetings/{meeting_id}
   ↓
 MeetingService
   ↓
@@ -77,8 +77,11 @@ PostgreSQL
 use cases, and commits successful writes. Repositories use SQLAlchemy 2.0 async
 queries, add/flush entities, and return ORM entities; they do not commit,
 rollback, or return API DTOs. The FastAPI session dependency rolls back when an
-exception propagates. The meeting and transcript routers are still scaffolded
-and are not mounted, so this is not yet an HTTP API implementation.
+exception propagates. The meeting router is mounted on meeting-service and
+currently exposes only internal `POST /meetings` and `GET /meetings/{meeting_id}`.
+The transcript router remains scaffolded and unmounted. These are not public
+gateway APIs: `/api/v1/meetings`, authentication, and gateway forwarding remain
+future work.
 
 For the detailed, current reference see [project-foundation.md](./project-foundation.md).
 

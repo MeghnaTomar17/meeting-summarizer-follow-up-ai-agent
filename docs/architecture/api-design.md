@@ -29,7 +29,10 @@ These must not be conflated.
 
 ### Internal APIs
 
-Internal services use **unversioned** paths. The gateway translates public `/api/v1/meetings` to internal `/meetings` when proxying (future phase).
+Internal services use **unversioned** paths. Meeting-service currently exposes
+internal `POST /meetings` and `GET /meetings/{meeting_id}`. The gateway will
+translate public `/api/v1/meetings` to internal `/meetings` when proxying in a
+future phase; gateway forwarding and authentication do not exist yet.
 
 ### API evolution policy
 
@@ -253,4 +256,6 @@ Routers in `app/routes/`: meetings, upload (nested under `/meetings`), transcrip
 
 Router in `app/routes/search.py`.
 
-Routers are scaffolded but not mounted until their feature phases.
+The meeting-service meetings router is mounted with internal create/get routes.
+Its transcript and upload routers remain scaffolded and unmounted. Gateway
+business routers and the search-service router remain scaffolded and unmounted.

@@ -4,7 +4,7 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 
 ## Status
 
-**Current checkpoint: Phase 3.3 complete** — the meeting domain has PostgreSQL ORM models, an applied initial Alembic migration, async repositories, and a service/use-case layer. HTTP meeting routes, authentication, AI processing, search, workers, and frontend integration remain scaffolded or planned.
+**Current checkpoint: Phase 3.4 complete** — the meeting domain has PostgreSQL ORM models, an applied initial Alembic migration, async repositories, a service/use-case layer, and internal create/get meeting routes. Gateway/public APIs, authentication, AI processing, search, workers, and frontend integration remain planned.
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 

@@ -3,10 +3,10 @@
 ## Current elevator pitch
 
 MannerAI is a microservice-oriented meeting-intelligence platform. Through
-Phase 3.3, its implemented vertical slice is persistence for meetings and
-transcripts: PostgreSQL schema, SQLAlchemy models, async repositories, and
-service use cases. Routes are still scaffolded and unmounted, so this is not
-yet an exposed meeting API or an AI-processing workflow.
+Phase 3.4, its implemented vertical slice is persistence for meetings and
+transcripts plus internal create/get meeting routes: PostgreSQL schema,
+SQLAlchemy models, async repositories, service use cases, and a thin FastAPI
+adapter. These are not public gateway APIs or an AI-processing workflow.
 
 ## Architecture to explain
 
@@ -113,11 +113,12 @@ separate opt-in integration check for the real driver/database boundary.
 
 ### FastAPI dependency injection and `get_db_session()`
 
-FastAPI `Depends()` declares that a route needs a dependency. The intended
-future route flow is:
+FastAPI `Depends()` declares that a route needs a dependency. In Phase 3.4, the
+mounted internal meeting routes use this flow:
 
 ```
 Route
+  → Depends(get_meeting_service)
   → Depends(get_db_session)
   → request-scoped AsyncSession
   → MeetingService
@@ -127,21 +128,163 @@ Route
 ```
 
 `get_db_session()` obtains a session from the shared factory and yields it to
-the route. The route would pass that same session to repositories and
-`MeetingService`; after the route/service completes, the dependency context
-closes the session. If an exception propagates, the dependency rolls back. It
-does not auto-commit because only the service knows whether the complete use
-case has succeeded; successful writes are committed there.
+the route dependency. `get_meeting_service()` uses that same session to build
+`MeetingRepository`, `TranscriptRepository`, and `MeetingService`; after the
+route/service completes, the dependency context closes the session. If an
+exception propagates, the dependency rolls back. It does not auto-commit because
+only the service knows whether the complete use case has succeeded; successful
+writes are committed there.
 
 Repositories deliberately do not own request/session lifecycle: they receive a
 session, issue database work, and flush. If each repository created sessions or
 committed independently, one use case could not reliably coordinate several
-writes atomically. Routes are currently unmounted scaffolds, so this describes
-the intended dependency wiring rather than an existing HTTP endpoint.
+writes atomically. The meeting router is mounted for internal `POST /meetings`
+and `GET /meetings/{meeting_id}`. Gateway `/api/v1` forwarding and
+authentication remain future work.
 
 An interviewer may ask, “Why does the dependency roll back but not commit?”
 Answer: rollback is failure cleanup for the request boundary; commit is a
 business/use-case decision owned by the service.
+
+## Phase 3.4 — Internal Meeting API study section
+
+### What was added and why it is internal
+
+Phase 3.4 mounts two meeting-service endpoints: `POST /meetings` and
+`GET /meetings/{meeting_id}`. They are internal service endpoints, not the
+future public `/api/v1/meetings` gateway contract. Authentication, JWT identity,
+gateway forwarding, and `MeetingServiceClient` are not implemented, so exposing
+a final public boundary now would be premature. The internal route slice proves
+the existing service architecture end-to-end without pretending ownership UUIDs
+supplied in `MeetingCreate` are an authorization model.
+
+### Reconstructing the router
+
+**A. `APIRouter`** — `APIRouter(prefix="/meetings", tags=["meetings"])` groups
+meeting endpoints. The prefix supplies the common internal path; tags organize
+the service's OpenAPI output. `app.include_router(meetings_router)` in
+`meeting-service/app/main.py` makes those routes active.
+
+Endpoint decorators state the HTTP contract. `@router.post("")` uses the
+router prefix, declares `response_model=MeetingPublic`, and explicitly returns
+HTTP 201. `@router.get("/{meeting_id}")` binds the path parameter and returns
+HTTP 200 by default. `response_model` asks FastAPI to validate/serialize the
+returned DTO, preventing ORM entities from becoming the response contract.
+
+**B. Service dependency** — `get_meeting_service` is a FastAPI dependency. Its
+`session: AsyncSession = Depends(get_db_session)` parameter causes FastAPI to
+resolve the request-scoped session first. It constructs `MeetingRepository` and
+`TranscriptRepository` with that same session, then constructs `MeetingService`.
+The route receives the ready-to-use service through
+`Depends(get_meeting_service)` rather than repeating object construction in
+every endpoint.
+
+**C. POST route** — FastAPI validates the request body as `MeetingCreate`.
+The thin route passes that DTO to `MeetingService.create_meeting()` and returns
+the resulting `MeetingPublic`. The service, not the route, parses UUIDs, creates
+the ORM entity, uses the repository, commits the successful write, and maps the
+result back to a DTO.
+
+**D. GET route** — FastAPI supplies `meeting_id` as a string path parameter.
+The route passes it unchanged to `MeetingService.get_meeting()`. The service
+parses/validates the UUID, looks it up through the repository, raises
+`NotFoundError` when absent, and maps an entity to `MeetingPublic` when found.
+
+**E. Error flow** — routes do not catch `AppError`. A missing meeting follows
+`MeetingService → NotFoundError("Meeting not found.") → shared handler → 404
+ErrorResponse`; an invalid UUID follows `MeetingService → ValidationError → 422`.
+An unexpected exception reaches the centralized handler and becomes a safe 500.
+The request-logging/exception infrastructure provides the request ID.
+
+### Runtime flow and transaction ownership
+
+```text
+HTTP request
+  ↓
+FastAPI route
+  ↓
+Depends(get_meeting_service)
+  ↓
+Depends(get_db_session)
+  ↓
+request-scoped AsyncSession
+  ↓
+MeetingRepository + TranscriptRepository
+  ↓
+MeetingService
+  ↓
+repository method
+  ↓
+AsyncSession → PostgreSQL
+```
+
+`get_db_session` owns session lifetime and rolls back when an exception escapes.
+It does not commit automatically. Repositories add/execute/flush but do not
+commit. `MeetingService` commits only after successful write use cases. Routes
+therefore must not create sessions, issue SQL, create ORM entities, parse UUIDs,
+commit, roll back, invent business rules, or translate application errors.
+
+An alternative would be to put SQL or `AsyncSession` work directly in each
+route. That is shorter initially, but it duplicates behavior, couples HTTP to
+persistence, makes route tests harder, and destroys the established transaction
+boundary. The accepted trade-off is a small dependency function and explicit
+service composition in exchange for predictable layering.
+
+### Route tests: dependency override versus PostgreSQL
+
+`test_meeting_routes.py` uses standard-library `unittest` and FastAPI
+`TestClient`. In production FastAPI resolves:
+
+```text
+get_meeting_service → get_db_session → repositories → MeetingService
+```
+
+In a route test, `app.dependency_overrides[get_meeting_service]` injects a mock
+service instead. `AsyncMock` simulates async `create_meeting`/`get_meeting`
+calls; `MagicMock` holds the boundary object. `TestClient` makes synchronous
+test calls while running the ASGI application, so the test still exercises
+routing, Pydantic request validation, response serialization, exception
+handlers, and request-ID behavior.
+
+The five current route tests are:
+
+- `test_meetings_router_is_mounted`
+- `test_create_meeting_returns_created_dto_from_service`
+- `test_get_meeting_returns_dto_from_service`
+- `test_missing_meeting_uses_standard_not_found_response`
+- `test_invalid_meeting_id_uses_standard_validation_response`
+
+Mocking is appropriate here because the route's job is HTTP adaptation, not
+database correctness. Repository/service unit tests and the opt-in PostgreSQL
+integration test cover lower boundaries. The trade-off is that route mocks do
+not prove actual SQL behavior; they keep feedback fast and deterministic.
+
+### Interview-ready answers
+
+**How does a request reach the database?** “FastAPI resolves the route's
+`get_meeting_service` dependency, which first resolves `get_db_session`. That
+request-scoped session builds both repositories and `MeetingService`. The route
+calls the service, which uses a repository through the same session; SQLAlchemy
+then reaches PostgreSQL. The service commits successful writes, while the
+session dependency rolls back propagated failures.”
+
+**Why use dependency injection?** “It creates request-scoped collaborators
+consistently and lets tests replace the service boundary without a database.”
+
+**Why not put SQL in routes?** “Routes should translate HTTP to use cases.
+Keeping SQL in repositories and decisions/commits in services makes each layer
+testable and keeps transaction ownership clear.”
+
+**Why are internal and public paths different?** “`/meetings` is the current
+internal service contract. `/api/v1/meetings` belongs to the gateway and waits
+for gateway forwarding plus authentication.”
+
+**Why are route tests mock-based?** “They verify the HTTP adapter and dependency
+composition independently; a separate opt-in test covers real PostgreSQL.”
+
+**How does FastAPI serialize `MeetingPublic`?** “The route declares it as
+`response_model`, so FastAPI validates and serializes the DTO rather than
+exposing an ORM entity.”
 
 ## Current model facts
 

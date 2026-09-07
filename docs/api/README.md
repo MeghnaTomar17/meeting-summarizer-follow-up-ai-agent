@@ -60,7 +60,10 @@ All routes below are gateway-owned under `/api/v1`:
 | `/analytics` | gateway-service | Reporting and insights |
 | `/integrations` | gateway-service | Calendar, email, webhooks |
 
-Business endpoints are not active yet. This table documents the approved contract.
+Gateway business endpoints are not active yet. This table documents the approved
+public contract. Separately, meeting-service exposes internal, unversioned
+`POST /meetings` and `GET /meetings/{meeting_id}` endpoints. They are not
+gateway `/api/v1` endpoints and do not yet have authentication.
 
 ## Pagination
 

@@ -86,7 +86,52 @@ to `uuid.UUID`, converts the distinct Pydantic and ORM status enums by value,
 serializes transcript segments with `model_dump()`, raises application errors,
 maps entities back to DTOs, and commits successful writes. It implements
 creation, lookup, organization listing, status updates, transcript creation,
-lookup, and replacement. It is not wired to FastAPI routes yet.
+lookup, and replacement. Phase 3.4 wires its create/get meeting use cases to
+internal meeting-service routes; the service remains independent of FastAPI.
+
+## Internal route composition (Phase 3.4)
+
+The mounted meeting-service router exposes internal `POST /meetings` and
+`GET /meetings/{meeting_id}`. It is not the future gateway `/api/v1/meetings`
+API: authentication, gateway forwarding, and `MeetingServiceClient` are not
+implemented. Building the internal route slice first validates the service
+architecture independently rather than presenting an unauthenticated route as a
+final public contract.
+
+```
+HTTP request
+  ↓
+FastAPI route
+  ↓
+Depends(get_meeting_service)
+  ↓
+Depends(get_db_session)
+  ↓
+request-scoped AsyncSession
+  ↓
+MeetingRepository + TranscriptRepository
+  ↓
+MeetingService
+  ↓
+repository method → AsyncSession → PostgreSQL
+```
+
+`get_meeting_service` constructs the repositories and `MeetingService` once per
+request from the injected session. This avoids duplicating composition in every
+endpoint while keeping routes free of SQL and transaction handling.
+`get_db_session()` obtains a session from the shared factory, yields it for the
+request, and rolls it back only if an exception propagates. On success it does
+not auto-commit: `MeetingService` remains the successful-write commit boundary,
+while reads do not commit.
+
+Routes accept validated Pydantic input and delegate: POST calls
+`MeetingService.create_meeting()` and returns `MeetingPublic` with HTTP 201;
+GET passes its string path parameter to `MeetingService.get_meeting()` and
+returns `MeetingPublic` with HTTP 200. Routes do not construct ORM models,
+convert UUIDs, execute SQL, commit, rollback, impose business rules, or catch
+and manually translate `AppError` instances. Existing handlers convert missing
+meetings to a 404 `ErrorResponse`, invalid UUIDs to 422, and unexpected errors
+to a safe 500; request IDs remain included.
 
 Transcript creation requires an existing meeting and rejects an existing
 transcript with `ConflictError`; replacement requires an existing transcript and

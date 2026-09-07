@@ -1,7 +1,7 @@
 # MannerAI Meetings Platform — Foundation and Current State
 
-> **Current scope:** Phase 0 through **Phase 3.3**
-> **Current implementation:** PostgreSQL meeting/transcript persistence and internal service use cases
+> **Current scope:** Phase 0 through **Phase 3.4**
+> **Current implementation:** PostgreSQL meeting/transcript persistence, internal use cases, and internal create/get meeting routes
 > **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
 This is the current reference for implemented architecture. The later
@@ -9,8 +9,9 @@ This is the current reference for implemented architecture. The later
 it must not be read as the current implementation status.
 
 Phase 3 implemented ORM models, an initial Alembic migration, repositories,
-and `MeetingService`. Business HTTP routes are still scaffolded and unmounted;
-auth, AI pipelines, search, workers, and frontend integration remain deferred.
+`MeetingService`, and internal meeting-service create/get routes. Public gateway
+routes remain unimplemented; auth, AI pipelines, search, workers, and frontend
+integration remain deferred.
 
 ---
 
@@ -26,6 +27,7 @@ auth, AI pipelines, search, workers, and frontend integration remain deferred.
 | 3.1 | Domain / ORM Modeling | Complete |
 | 3.2 | Initial Alembic Migration | Complete and applied locally |
 | 3.3 | Repository + Service / Use-Case Layer | Complete |
+| 3.4 | Internal Meeting-service Routes | Complete |
 
 ---
 
@@ -72,10 +74,11 @@ flowchart TB
 - meeting-service PostgreSQL lifespan and readiness probing
 - Alembic initial domain revision: `0001_meetings_transcripts`
 - `Meeting` and `Transcript` ORM models, repositories, and `MeetingService`
+- Internal meeting-service `POST /meetings` and `GET /meetings/{meeting_id}` routes
 
 ### Planned / deferred integrations
 
-- Business HTTP routes (routers exist as scaffolding only)
+- Gateway/public business HTTP routes; the meeting-service has only internal create/get meeting routes
 - Gateway proxying to internal services
 - Authentication and authorization
 - Redis client wiring
@@ -93,7 +96,7 @@ Configuration fields and stub modules exist for Redis, Qdrant, and Celery, but t
 | Service | Current responsibility | DB access | Status |
 |---------|---------------------|-----------|--------|
 | **gateway-service** | Public API entry, OpenAPI, health probes, `/api/v1` router mount point | None | Foundation only |
-| **meeting-service** | Health probes, PostgreSQL lifespan, DB readiness | **PostgreSQL (active)** | Foundation + DB owner |
+| **meeting-service** | Health probes, PostgreSQL lifecycle/readiness, internal create/get meeting API | **PostgreSQL (active)** | Persistence + internal route slice |
 | **ai-service** | Health probes | None | Foundation only |
 | **search-service** | Health probes | None | Foundation only |
 | **worker-service** | Health probes | None | Foundation only |
