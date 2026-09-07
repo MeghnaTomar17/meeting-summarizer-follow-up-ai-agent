@@ -48,6 +48,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.service.get_meeting = AsyncMock()
         self.service.list_meetings = AsyncMock()
         self.service.update_meeting = AsyncMock()
+        self.service.update_meeting_status = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
         self.client = TestClient(self.app, raise_server_exceptions=False)
 
@@ -84,6 +85,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         paths = [route.path for route in self.app.routes]
         self.assertIn("/meetings", paths)
         self.assertIn("/meetings/{meeting_id}", paths)
+        self.assertIn("/meetings/{meeting_id}/status", paths)
 
     def test_create_meeting_returns_created_dto_from_service(self) -> None:
         created = self._meeting_public()
@@ -300,6 +302,93 @@ class MeetingRouteTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["error"]["code"], "INTERNAL_SERVER_ERROR")
+
+    def test_update_status_returns_dto_and_forwards_status(self) -> None:
+        from shared.schemas.meeting import MeetingStatus
+
+        meeting_id = uuid.uuid4()
+        updated = self._meeting_public(meeting_id)
+        updated.status = MeetingStatus.PROCESSING
+        self.service.update_meeting_status.return_value = updated
+
+        response = self.client.patch(
+            f"/meetings/{meeting_id}/status",
+            json={"status": "processing"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "processing")
+        self.service.update_meeting_status.assert_awaited_once_with(
+            str(meeting_id),
+            MeetingStatus.PROCESSING,
+        )
+        self.service.update_meeting.assert_not_called()
+
+    def test_update_status_accepts_every_defined_status(self) -> None:
+        from shared.schemas.meeting import MeetingStatus
+
+        meeting_id = uuid.uuid4()
+        self.service.update_meeting_status.return_value = self._meeting_public(meeting_id)
+
+        for status_value in MeetingStatus:
+            with self.subTest(status=status_value.value):
+                self.service.update_meeting_status.reset_mock()
+                response = self.client.patch(
+                    f"/meetings/{meeting_id}/status",
+                    json={"status": status_value.value},
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.service.update_meeting_status.assert_awaited_once_with(
+                    str(meeting_id),
+                    status_value,
+                )
+
+    def test_update_status_rejects_invalid_status_before_calling_service(self) -> None:
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}/status",
+            json={"status": "invalid"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+        self.service.update_meeting_status.assert_not_called()
+
+    def test_update_status_rejects_unexpected_request_fields(self) -> None:
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}/status",
+            json={"status": "ready", "title": "Not allowed"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+        self.service.update_meeting_status.assert_not_called()
+
+    def test_update_status_missing_meeting_uses_standard_not_found_response(self) -> None:
+        from shared.exceptions.common import NotFoundError
+
+        self.service.update_meeting_status.side_effect = NotFoundError("Meeting not found.")
+
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}/status",
+            json={"status": "ready"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"]["code"], "NOT_FOUND")
+        self.assertIn("X-Request-ID", response.headers)
+
+    def test_update_status_unexpected_error_uses_safe_standard_response(self) -> None:
+        self.service.update_meeting_status.side_effect = RuntimeError("database failed")
+
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}/status",
+            json={"status": "ready"},
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["error"]["code"], "INTERNAL_SERVER_ERROR")
+        self.assertNotIn("database failed", response.text)
 
 
 if __name__ == "__main__":

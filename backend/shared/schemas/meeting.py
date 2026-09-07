@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MeetingStatus(str, Enum):
@@ -38,6 +38,14 @@ class MeetingUpdate(BaseModel):
     description: str | None = None
     scheduled_at: datetime | None = None
     participants: list[str] = Field(default_factory=list)
+
+
+class MeetingStatusUpdate(BaseModel):
+    """Request payload for an internal meeting status update."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: MeetingStatus
 
 
 class MeetingInDB(MeetingBase):

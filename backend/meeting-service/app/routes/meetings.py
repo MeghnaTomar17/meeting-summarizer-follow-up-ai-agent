@@ -13,7 +13,12 @@ from app.repositories.meeting_repository import MeetingRepository
 from app.repositories.transcript_repository import TranscriptRepository
 from app.services.meeting_service import MeetingService
 from shared.database.session import get_db_session
-from shared.schemas.meeting import MeetingCreate, MeetingPublic, MeetingUpdate
+from shared.schemas.meeting import (
+    MeetingCreate,
+    MeetingPublic,
+    MeetingStatusUpdate,
+    MeetingUpdate,
+)
 from shared.schemas.pagination import PaginatedResponse, PaginationParams
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
@@ -71,3 +76,13 @@ async def update_meeting(
 ) -> MeetingPublic:
     """Partially update mutable meeting details through the application service."""
     return await service.update_meeting(meeting_id, payload)
+
+
+@router.patch("/{meeting_id}/status", response_model=MeetingPublic)
+async def update_meeting_status(
+    meeting_id: str,
+    payload: MeetingStatusUpdate,
+    service: MeetingService = Depends(get_meeting_service),
+) -> MeetingPublic:
+    """Update a meeting lifecycle status through the application service."""
+    return await service.update_meeting_status(meeting_id, payload.status)
