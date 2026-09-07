@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from app.config.settings import get_settings
 from app.database import shutdown_database, startup_database
 from app.routes.meetings import router as meetings_router
+from app.routes.transcripts import router as transcripts_router
 from shared.database.health import check_postgres_connectivity
 from shared.middleware.request_logging import REQUEST_ID_HEADER
 from shared.schemas.errors import ErrorBody, ErrorResponse
@@ -49,8 +50,9 @@ register_logging_middleware(app)
 register_exception_handlers(app)
 
 app.include_router(meetings_router)
+app.include_router(transcripts_router)
 
-# TODO: include_router upload, transcripts
+# TODO: include_router upload
 # TODO: lifespan — object storage
 
 

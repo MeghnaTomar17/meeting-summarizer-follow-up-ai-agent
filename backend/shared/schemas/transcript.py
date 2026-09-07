@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TranscriptSegment(BaseModel):
@@ -21,6 +21,15 @@ class TranscriptSegment(BaseModel):
 
 class TranscriptBase(BaseModel):
     meeting_id: str
+    segments: list[TranscriptSegment] = Field(default_factory=list)
+    language: str = "en"
+
+
+class TranscriptWrite(BaseModel):
+    """Transcript content supplied to nested meeting transcript routes."""
+
+    model_config = ConfigDict(extra="forbid")
+
     segments: list[TranscriptSegment] = Field(default_factory=list)
     language: str = "en"
 

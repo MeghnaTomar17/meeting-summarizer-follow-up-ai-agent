@@ -9,9 +9,53 @@ NOTE: Semantic/text chunking for embeddings and RAG is owned by search-service
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, status
+
+from app.routes.meetings import get_meeting_service
+from app.services.meeting_service import MeetingService
+from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptWrite
 
 router = APIRouter(prefix="/meetings", tags=["transcripts"])
 
-# TODO: GET /{meeting_id}/transcript
-# TODO: PUT /{meeting_id}/transcript — replace segments after processing
+
+@router.post(
+    "/{meeting_id}/transcript",
+    response_model=TranscriptInDB,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_transcript(
+    meeting_id: str,
+    payload: TranscriptWrite,
+    service: MeetingService = Depends(get_meeting_service),
+) -> TranscriptInDB:
+    """Create a meeting transcript using the authoritative path meeting ID."""
+    return await service.create_transcript(
+        TranscriptBase(
+            meeting_id=meeting_id,
+            segments=payload.segments,
+            language=payload.language,
+        )
+    )
+
+
+@router.get("/{meeting_id}/transcript", response_model=TranscriptInDB)
+async def get_transcript(
+    meeting_id: str,
+    service: MeetingService = Depends(get_meeting_service),
+) -> TranscriptInDB:
+    """Return a meeting transcript through the meeting application service."""
+    return await service.get_transcript(meeting_id)
+
+
+@router.put("/{meeting_id}/transcript", response_model=TranscriptInDB)
+async def replace_transcript(
+    meeting_id: str,
+    payload: TranscriptWrite,
+    service: MeetingService = Depends(get_meeting_service),
+) -> TranscriptInDB:
+    """Replace an existing meeting transcript through the application service."""
+    return await service.replace_transcript(
+        meeting_id,
+        segments=payload.segments,
+        language=payload.language,
+    )
