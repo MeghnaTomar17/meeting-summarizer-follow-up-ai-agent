@@ -217,12 +217,12 @@ class DatabaseFoundationTestCase(unittest.TestCase):
         env_source = (MIGRATIONS_ROOT / "env.py").read_text(encoding="utf-8")
         self.assertIn("get_base_settings().database_url", env_source)
 
-    def test_meeting_models_register_expected_metadata(self) -> None:
+    def test_persisted_models_register_expected_metadata(self) -> None:
         import shared.database.models  # noqa: F401
         from shared.database.base import Base
         from shared.database.models.meeting import Meeting
 
-        self.assertEqual(set(Base.metadata.tables), {"meetings", "transcripts"})
+        self.assertEqual(set(Base.metadata.tables), {"meetings", "transcripts", "users"})
         self.assertEqual(Meeting.__table__.c.status.type.enums, [
             "pending",
             "processing",
