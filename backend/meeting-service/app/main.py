@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from app.config.settings import get_settings
 from app.database import shutdown_database, startup_database
+from app.routes.meetings import router as meetings_router
 from shared.database.health import check_postgres_connectivity
 from shared.middleware.request_logging import REQUEST_ID_HEADER
 from shared.schemas.errors import ErrorBody, ErrorResponse
@@ -47,7 +48,9 @@ app = FastAPI(
 register_logging_middleware(app)
 register_exception_handlers(app)
 
-# TODO: include_router upload, meetings, transcripts
+app.include_router(meetings_router)
+
+# TODO: include_router upload, transcripts
 # TODO: lifespan — object storage
 
 
