@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — scaffolding documentation.
+> MannerAI Meetings Platform — current architecture through Phase 3.3.
 
 **Entry point:** For the consolidated foundation reference covering Phases 2.1–2.5, see [project-foundation.md](./project-foundation.md).
 
@@ -29,7 +29,7 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 - **SQLAlchemy 2.0 async** + **asyncpg** for PostgreSQL access
 - **Alembic** for schema migrations (see `database/postgresql/migrations.md`)
 - **Pydantic schemas** in `backend/shared/schemas/` for shared API/domain DTOs
-- **SQLAlchemy ORM models** in `backend/shared/database/models/` (TODO)
+- **SQLAlchemy ORM models** in `backend/shared/database/models/` for meetings and transcripts
 
 ## Logging
 
@@ -55,7 +55,32 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 - Async SQLAlchemy 2.x + asyncpg (see `docs/architecture/database.md`)
 - Shared infrastructure in `backend/shared/database/`
 - Alembic migrations at `backend/migrations/`
-- meeting-service owns PostgreSQL connectivity in Phase 2.5
+- meeting-service owns PostgreSQL connectivity and the current meeting/transcript persistence use cases
+
+## Current meeting persistence boundary
+
+Phase 3.1–3.3 implemented the internal persistence path:
+
+```
+Route (not wired yet)
+  ↓
+MeetingService
+  ↓
+MeetingRepository / TranscriptRepository
+  ↓
+AsyncSession
+  ↓
+PostgreSQL
+```
+
+`MeetingService` maps Pydantic DTOs to ORM entities, coordinates multi-step
+use cases, and commits successful writes. Repositories use SQLAlchemy 2.0 async
+queries, add/flush entities, and return ORM entities; they do not commit,
+rollback, or return API DTOs. The FastAPI session dependency rolls back when an
+exception propagates. The meeting and transcript routers are still scaffolded
+and are not mounted, so this is not yet an HTTP API implementation.
+
+For the detailed, current reference see [project-foundation.md](./project-foundation.md).
 
 ## TODO
 

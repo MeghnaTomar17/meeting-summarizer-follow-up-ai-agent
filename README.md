@@ -4,7 +4,7 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 
 ## Status
 
-**Phase 1 complete** — Docker Compose stack, health checks, and service containers are wired. Business logic and AI features are not implemented yet.
+**Current checkpoint: Phase 3.3 complete** — the meeting domain has PostgreSQL ORM models, an applied initial Alembic migration, async repositories, and a service/use-case layer. HTTP meeting routes, authentication, AI processing, search, workers, and frontend integration remain scaffolded or planned.
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -119,7 +119,7 @@ Each service exposes:
 
 ## Development
 
-See `docs/architecture/` for system design (to be expanded).
+See [`docs/architecture/project-foundation.md`](docs/architecture/project-foundation.md) for the current implementation boundary, [`docs/engineering/problems-and-solutions.md`](docs/engineering/problems-and-solutions.md) for the engineering history, and [`docs/study/phase-3-study-guide.md`](docs/study/phase-3-study-guide.md) for a Phase 3 walkthrough.
 
 ## License
 

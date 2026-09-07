@@ -18,15 +18,17 @@
 | Redis      | Cache, sessions, Celery broker            |
 | Qdrant     | Semantic search over transcript chunks    |
 
-## PostgreSQL foundation (Phase 2.5)
+## PostgreSQL foundation and current domain schema (Phases 2.5–3.3)
 
 - Async engine/session in `backend/shared/database/`
 - Alembic at repository root (`alembic.ini`, `backend/migrations/`)
 - meeting-service integrates database lifespan and readiness
+- Initial applied domain revision: `0001_meetings_transcripts`
+- Implemented tables: `meetings`, `transcripts`; implemented enum: `meeting_status`
+- Repositories and the service/use-case layer use the shared `AsyncSession`
 - See [`docs/architecture/database.md`](../architecture/database.md)
 
 ## TODO
 
-- First Alembic revision when ORM business models are implemented
 - Backup and restore runbooks (pg_dump / point-in-time recovery)
 - Data retention and soft-delete policies

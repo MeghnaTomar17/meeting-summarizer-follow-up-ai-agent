@@ -32,7 +32,7 @@ alembic -c alembic.ini history
 # Apply all pending migrations
 alembic -c alembic.ini upgrade head
 
-# Create a new revision (when ORM models exist)
+# Create a new revision after an intentional ORM schema change
 alembic -c alembic.ini revision --autogenerate -m "describe change"
 ```
 
@@ -45,8 +45,22 @@ alembic -c alembic.ini revision --autogenerate -m "describe change"
 
 ## Current revision
 
-`0001_meetings_transcripts` is the initial domain-schema revision. It
+`0001_meetings_transcripts` is the applied initial domain-schema revision. It
 creates the `meeting_status` PostgreSQL enum, the `meetings` and `transcripts`
 tables, their lookup indexes, and the cascading transcript-to-meeting foreign
-key. It has not been applied automatically; use `upgrade head` against an
-intended PostgreSQL database.
+key. Its migration file is `backend/migrations/versions/0001_create_meetings_and_transcripts.py`.
+
+### Initial migration history
+
+The local development database was checked before migration: it had no
+application tables and no `alembic_version` table. The original long revision
+identifier, `0001_create_meetings_and_transcripts`, encountered PostgreSQL's
+Alembic version-column length boundary during insertion. The revision was
+shortened to `0001_meetings_transcripts` (which fits Alembic's default
+`VARCHAR(32)` column), then the migration was applied and the resulting schema
+was verified. The exact hidden cause of the boundary failure was not
+conclusively established; the durable fix was the concise revision ID.
+
+`upgrade()` creates the enum before the tables. `downgrade()` drops the
+transcript index/table, meeting indexes/table, then the enum, reversing
+dependencies safely.

@@ -49,6 +49,58 @@ Route → Service → Repository → AsyncSession → commit/rollback
 - Repositories execute queries; the service layer owns transaction boundaries.
 - On exception, the session dependency rolls back before re-raising.
 
+`flush` and `commit` are intentionally separate. A repository flushes pending
+SQL so generated values and constraint errors are available inside the current
+transaction. `MeetingService` commits only after its full successful use case;
+reads never commit. Repositories do not rollback, because the dependency owns
+that exception path.
+
+## Implemented Phase 3 domain schema
+
+Revision `0001_meetings_transcripts` (file:
+`backend/migrations/versions/0001_create_meetings_and_transcripts.py`) is the
+initial applied domain schema. It creates:
+
+- native `meeting_status` values, in order: `pending`, `processing`, `ready`, `failed`;
+- `meetings`, including required UUID ownership fields, `JSONB` participants,
+  timezone-aware timestamps, and a lowercase status server default;
+- `transcripts`, including unique `meeting_id`, `JSONB` segments, nullable
+  language, and a foreign key to `meetings.id` with `ON DELETE CASCADE`;
+- `ix_meetings_organization_id`, `ix_meetings_created_by`, and unique
+  `ix_transcripts_meeting_id`.
+
+The ORM uses `values_callable` so SQLAlchemy persists enum values (`pending`)
+instead of Python member names (`PENDING`). `Meeting.transcript` is a one-to-one
+relationship (`uselist=False`) and uses `delete-orphan` for aggregate ownership.
+`organization_id` and `created_by` are UUID fields, **not foreign keys**: no
+organization/user ORM tables exist yet.
+
+## Implemented data-access and use-case boundaries
+
+`MeetingRepository` and `TranscriptRepository` receive an `AsyncSession`, use
+SQLAlchemy 2.0 `select`/`execute`, return ORM entities, and add/flush writes.
+They do not emit DTOs, make business decisions, commit, or rollback.
+
+`MeetingService` receives the session and repositories. It converts string UUIDs
+to `uuid.UUID`, converts the distinct Pydantic and ORM status enums by value,
+serializes transcript segments with `model_dump()`, raises application errors,
+maps entities back to DTOs, and commits successful writes. It implements
+creation, lookup, organization listing, status updates, transcript creation,
+lookup, and replacement. It is not wired to FastAPI routes yet.
+
+Transcript creation requires an existing meeting and rejects an existing
+transcript with `ConflictError`; replacement requires an existing transcript and
+does not create one. No status-transition graph or PostgreSQL upsert has been
+introduced because neither behavior is established.
+
+### Deferred alignment
+
+The database/ORM permits `Transcript.language = NULL`, while `TranscriptInDB`
+requires a non-null string. The service maps stored `NULL` to `"en"`; this keeps
+the DTO valid but is not lossless. Future work must choose either a nullable DTO
+or a non-null database column/default. ORM and Pydantic `MeetingStatus` remain
+separate definitions with explicit `.value` mapping.
+
 ## Configuration
 
 From `SharedSettings` (Phase 2.1):

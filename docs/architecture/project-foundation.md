@@ -1,12 +1,16 @@
-# MannerAI Meetings Platform — Project Foundation
+# MannerAI Meetings Platform — Foundation and Current State
 
-> **Scope:** Architectural foundation completed through **Phase 2.5**  
-> **Last updated phase:** Phase 2.5 — PostgreSQL Database Foundation  
-> **Maturity:** Production-grade foundation (not a fully production-ready platform)
+> **Current scope:** Phase 0 through **Phase 3.3**
+> **Current implementation:** PostgreSQL meeting/transcript persistence and internal service use cases
+> **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
-This document is the authoritative entry point for the completed backend foundation. It describes **what currently exists** in the repository, **why** it exists, **how** the pieces interact, and **what is deliberately deferred**.
+This is the current reference for implemented architecture. The later
+“Phase 2.5 historical snapshot” preserves what was true at that checkpoint;
+it must not be read as the current implementation status.
 
-Business features (auth, meetings CRUD, AI pipelines, search, workers) are **not** implemented yet.
+Phase 3 implemented ORM models, an initial Alembic migration, repositories,
+and `MeetingService`. Business HTTP routes are still scaffolded and unmounted;
+auth, AI pipelines, search, workers, and frontend integration remain deferred.
 
 ---
 
@@ -19,9 +23,9 @@ Business features (auth, meetings CRUD, AI pipelines, search, workers) are **not
 | 2.3 | Exception & Error Handling | Complete |
 | 2.4 | API Design & Contract Standardization | Complete |
 | 2.5 | PostgreSQL Database Foundation | Complete |
-| 2.6 | — | **Not started** |
-
-Phase 2.6 has not been started.
+| 3.1 | Domain / ORM Modeling | Complete |
+| 3.2 | Initial Alembic Migration | Complete and applied locally |
+| 3.3 | Repository + Service / Use-Case Layer | Complete |
 
 ---
 
@@ -66,7 +70,8 @@ flowchart TB
 - Gateway public API prefix (`/api/v1`) and OpenAPI customization
 - Async SQLAlchemy PostgreSQL infrastructure
 - meeting-service PostgreSQL lifespan and readiness probing
-- Alembic migration infrastructure (no business revisions yet)
+- Alembic initial domain revision: `0001_meetings_transcripts`
+- `Meeting` and `Transcript` ORM models, repositories, and `MeetingService`
 
 ### Planned / deferred integrations
 
@@ -123,7 +128,10 @@ These layers are **separate by design**:
 - ORM models must **not** be exposed directly as API `response_model`
 - `*Public` schemas (e.g. `MeetingPublic`) exclude internal persistence fields
 
-**Current ORM state:** `DeclarativeBase`, UUID/timestamp mixins, and Alembic metadata exist. **No business ORM model classes or tables** are implemented yet.
+**Current ORM state:** `DeclarativeBase`, UUID/timestamp mixins, metadata, and
+business models (`Meeting`, `Transcript`) exist. The models are imported through
+`shared.database.models` for Alembic metadata discovery; ORM entities remain
+separate from public Pydantic response models.
 
 ---
 
@@ -319,6 +327,83 @@ Defaults: `page=1`, `page_size=20`, max `page_size=100`. Implemented as schemas/
 `infrastructure/nginx/nginx.conf` proxies `/api/` to gateway. Public contract documented as `/api/v1`. Nginx is configured but Docker deployment is deferred.
 
 ---
+
+## Phase 3 current persistence architecture
+
+### Domain model and schema
+
+`Meeting` and `Transcript` inherit `UUIDPrimaryKeyMixin` and `TimestampMixin`,
+giving UUID primary keys and timezone-aware `created_at`/`updated_at` columns.
+`participants` and `segments` are PostgreSQL `JSONB`. `MeetingStatus` persists
+the lowercase native PostgreSQL enum values `pending`, `processing`, `ready`,
+and `failed` through `values_callable`, rather than the uppercase Python member
+names. A meeting has at most one transcript; `transcripts.meeting_id` is unique
+and has a PostgreSQL foreign key with `ON DELETE CASCADE`. ORM-side
+`delete-orphan` mirrors that aggregate ownership.
+
+`organization_id` and `created_by` are required UUID ownership fields, not
+foreign keys: user and organization models do not exist yet. This is acceptable
+for the current bounded domain, but future user/organization ownership requires
+models, migrations, and foreign-key decisions.
+
+### Revision and verification
+
+`backend/migrations/versions/0001_create_meetings_and_transcripts.py` created
+the enum, `meetings`, `transcripts`, indexes
+`ix_meetings_organization_id`, `ix_meetings_created_by`, and
+`ix_transcripts_meeting_id`. Its downgrade reverses dependencies. The local
+database was checked empty before application, then schema-verified after the
+migration. The applied revision is `0001_meetings_transcripts`.
+
+### Repositories and service/use cases
+
+`MeetingRepository` provides `create`, `get_by_id`, `list_by_organization`, and
+`update_status`; `TranscriptRepository` provides `get_by_meeting_id`, `create`,
+and `replace_for_meeting`. They accept UUIDs/ORM entities, use `select`,
+`AsyncSession.execute`, `add`, and `flush`, and return ORM entities. They never
+commit, rollback, return DTOs, or apply business decisions.
+
+`MeetingService` is the Pydantic/ORM boundary. It validates string UUIDs,
+converts status values and transcript segments, enforces missing/duplicate
+semantics, maps ORM entities to DTOs, and commits successful writes exactly once.
+Reads do not commit. If an exception propagates, `get_db_session()` performs the
+rollback; the service intentionally does not call rollback itself. This supports
+future multi-repository use cases in one transaction.
+
+Current use cases: `create_meeting`, `get_meeting`, `list_meetings`,
+`update_meeting_status`, `create_transcript`, `get_transcript`, and
+`replace_transcript`. No status-transition graph and no PostgreSQL upsert have
+been introduced. Creating a transcript requires an existing meeting and no
+existing transcript; replacement requires an existing transcript and never
+creates one.
+
+### Explicit DTO/ORM mapping and errors
+
+Pydantic types remain API/domain contracts and SQLAlchemy types remain
+persistence models. The service maps explicitly rather than using
+`from_attributes=True`: strings become `uuid.UUID`, schema status values become
+ORM status values, and `TranscriptSegment.model_dump()` produces JSON-ready
+dictionaries; the reverse mapping converts UUIDs to strings and enum values back
+to the schema enum. `ValidationError` represents invalid UUID input,
+`NotFoundError` represents missing meetings/transcripts, and `ConflictError`
+represents duplicate transcripts. Unexpected persistence errors propagate for
+the registered boundary handlers rather than exposing raw database errors.
+
+### Deferred decisions
+
+- ORM `Transcript.language` is nullable but `TranscriptInDB.language` is not.
+  The service currently normalizes a stored `NULL` to `"en"`; that is valid at
+  the DTO boundary but not lossless. Decide later whether the DTO becomes
+  nullable or the database becomes non-null with a default.
+- ORM and Pydantic each define `MeetingStatus`; their values are mapped
+  explicitly. Consolidating enum ownership is a future design decision.
+- Routes are not wired, so these use cases are not yet public/internal HTTP APIs.
+
+## Phase 2.5 historical snapshot
+
+The following section records the end-of-Phase-2.5 foundation. Statements such
+as “future” or “no business models” were correct then and are retained for
+historical context; the Phase 3 sections above describe the current state.
 
 ## Phase 2.5 — PostgreSQL Database Foundation
 
@@ -668,12 +753,8 @@ Detailed phase documents remain authoritative for their specific topics. This do
 
 ---
 
-## Documentation Review Findings
+## Documentation Review Findings (historical)
 
-Minor inconsistencies noted (not fixed in this documentation task):
-
-1. **`docs/architecture/overview.md`** still lists "SQLAlchemy ORM models (TODO)" — accurate but now partially superseded by Phase 2.5 infrastructure (Base/mixins exist; business models do not).
-2. **Gateway `main.py` TODO** still mentions "lifespan — postgres/redis init" — gateway DB access is deferred; the TODO is aspirational for a future auth phase.
-3. **Repository stubs** reference `AsyncSession` but are not wired to routes — documented as future, not current.
-
-No code issues requiring immediate fix were identified during this documentation review.
+This heading preserves the Phase-2.5 review record. Its original observations
+about ORM TODOs and repository stubs are historical rather than current. The
+current review is captured in the Phase 3 sections and the engineering log.

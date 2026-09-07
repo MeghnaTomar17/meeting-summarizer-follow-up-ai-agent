@@ -1,14 +1,17 @@
 # PostgreSQL Indexes
 
-> Placeholder index plan — apply via Alembic migrations.
+> The three `meetings`/`transcripts` entries are implemented by revision
+> `0001_meetings_transcripts`: `ix_meetings_organization_id`,
+> `ix_meetings_created_by`, and unique `ix_transcripts_meeting_id`.
+> Remaining entries are planning notes and are not yet database indexes.
 
 | Table       | Index fields                    | Type     | Notes                        |
 |-------------|---------------------------------|----------|------------------------------|
 | users       | email                           | UNIQUE   | Login lookup                 |
 | users       | organization_id                 | BTREE    | Org member listing           |
-| meetings    | organization_id, created_at DESC | BTREE   | Dashboard listing            |
-| meetings    | created_by, status              | BTREE    | User-scoped queries          |
-| transcripts | meeting_id                      | UNIQUE   | One transcript per meeting   |
+| meetings    | organization_id (`ix_meetings_organization_id`) | BTREE | Implemented org lookup |
+| meetings    | created_by (`ix_meetings_created_by`) | BTREE | Implemented creator lookup |
+| transcripts | meeting_id (`ix_transcripts_meeting_id`) | UNIQUE BTREE | Implemented one transcript per meeting |
 | tasks       | meeting_id, status              | BTREE    | Action item boards           |
 | tasks       | assignee_id, status             | BTREE    | My tasks view                |
 | decisions   | meeting_id                      | BTREE    | Decision timeline            |
