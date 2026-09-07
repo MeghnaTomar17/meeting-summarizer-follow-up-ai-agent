@@ -6,22 +6,52 @@ Service ownership: meeting-service.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from shared.database.models.meeting import Meeting, MeetingStatus
 
 
 class MeetingRepository:
-    """Repository pattern — TODO: inject AsyncSession via FastAPI Depends."""
+    """PostgreSQL data access for persisted meetings."""
 
-    def __init__(self, session: "AsyncSession") -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(self, data: dict[str, Any]) -> dict[str, Any]:
-        _ = data
-        raise NotImplementedError
+    async def create(self, meeting: Meeting) -> Meeting:
+        self._session.add(meeting)
+        await self._session.flush()
+        return meeting
 
-    async def get_by_id(self, meeting_id: str) -> dict[str, Any] | None:
-        _ = meeting_id
-        raise NotImplementedError
+    async def get_by_id(self, meeting_id: UUID) -> Meeting | None:
+        statement = select(Meeting).where(Meeting.id == meeting_id)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def list_by_organization(
+        self,
+        organization_id: UUID,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[Meeting]:
+        statement = (
+            select(Meeting)
+            .where(Meeting.organization_id == organization_id)
+            .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def update_status(
+        self,
+        meeting: Meeting,
+        status: MeetingStatus,
+    ) -> Meeting:
+        meeting.status = status
+        await self._session.flush()
+        return meeting
