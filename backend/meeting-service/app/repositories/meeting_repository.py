@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.database.models.meeting import Meeting, MeetingStatus
@@ -46,6 +46,15 @@ class MeetingRepository:
         )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def count_by_organization(self, organization_id: UUID) -> int:
+        statement = (
+            select(func.count())
+            .select_from(Meeting)
+            .where(Meeting.organization_id == organization_id)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one()
 
     async def update_status(
         self,

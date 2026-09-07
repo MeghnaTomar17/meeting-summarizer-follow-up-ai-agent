@@ -15,6 +15,7 @@ from shared.exceptions.common import ConflictError, NotFoundError
 from shared.exceptions.common import ValidationError as AppValidationError
 from shared.schemas.meeting import MeetingCreate, MeetingPublic
 from shared.schemas.meeting import MeetingStatus as SchemaMeetingStatus
+from shared.schemas.pagination import PaginatedResponse, build_paginated_response
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
 
 
@@ -57,15 +58,23 @@ class MeetingService:
         self,
         organization_id: str,
         *,
+        page: int,
         limit: int,
         offset: int,
-    ) -> list[MeetingPublic]:
+    ) -> PaginatedResponse[MeetingPublic]:
+        organization_uuid = self._parse_uuid(organization_id, "organization ID")
         meetings = await self._meeting_repository.list_by_organization(
-            self._parse_uuid(organization_id, "organization ID"),
+            organization_uuid,
             limit=limit,
             offset=offset,
         )
-        return [self._meeting_to_public(meeting) for meeting in meetings]
+        total = await self._meeting_repository.count_by_organization(organization_uuid)
+        return build_paginated_response(
+            [self._meeting_to_public(meeting) for meeting in meetings],
+            page=page,
+            page_size=limit,
+            total=total,
+        )
 
     async def update_meeting_status(
         self,

@@ -14,6 +14,7 @@ from app.repositories.transcript_repository import TranscriptRepository
 from app.services.meeting_service import MeetingService
 from shared.database.session import get_db_session
 from shared.schemas.meeting import MeetingCreate, MeetingPublic
+from shared.schemas.pagination import PaginatedResponse, PaginationParams
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -36,6 +37,21 @@ async def create_meeting(
 ) -> MeetingPublic:
     """Create a meeting through the meeting application service."""
     return await service.create_meeting(payload)
+
+
+@router.get("", response_model=PaginatedResponse[MeetingPublic])
+async def list_meetings(
+    organization_id: str,
+    pagination: PaginationParams = Depends(),
+    service: MeetingService = Depends(get_meeting_service),
+) -> PaginatedResponse[MeetingPublic]:
+    """List an organization's meetings through the meeting application service."""
+    return await service.list_meetings(
+        organization_id,
+        page=pagination.page,
+        limit=pagination.page_size,
+        offset=(pagination.page - 1) * pagination.page_size,
+    )
 
 
 @router.get("/{meeting_id}", response_model=MeetingPublic)

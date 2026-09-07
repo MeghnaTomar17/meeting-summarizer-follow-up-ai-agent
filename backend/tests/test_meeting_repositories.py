@@ -114,6 +114,24 @@ class RepositoryTestCase(unittest.TestCase):
         self.session.commit.assert_not_called()
         self.session.rollback.assert_not_called()
 
+    def test_meeting_count_filters_by_organization_without_transaction(self) -> None:
+        organization_id = uuid.uuid4()
+        repository = self.MeetingRepository(self.session)
+        result = MagicMock()
+        result.scalar_one.return_value = 42
+        self.session.execute.return_value = result
+
+        count = asyncio.run(repository.count_by_organization(organization_id))
+
+        self.assertEqual(count, 42)
+        statement = self.session.execute.await_args.args[0]
+        sql = str(statement)
+        self.assertIn("FROM meetings", sql)
+        self.assertIn("WHERE meetings.organization_id", sql)
+        self.assertIn(organization_id, statement.compile().params.values())
+        self.session.commit.assert_not_called()
+        self.session.rollback.assert_not_called()
+
     def test_meeting_update_status_flushes_without_commit(self) -> None:
         meeting = self._meeting()
         repository = self.MeetingRepository(self.session)

@@ -46,6 +46,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.service = MagicMock()
         self.service.create_meeting = AsyncMock()
         self.service.get_meeting = AsyncMock()
+        self.service.list_meetings = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
         self.client = TestClient(self.app, raise_server_exceptions=False)
 
@@ -108,6 +109,95 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.assertEqual(response.json()["id"], str(meeting_id))
         self.service.get_meeting.assert_awaited_once_with(str(meeting_id))
         self.service.create_meeting.assert_not_called()
+
+    def test_list_meetings_returns_paginated_dtos_and_forwards_pagination(self) -> None:
+        from shared.schemas.pagination import build_paginated_response
+
+        organization_id = uuid.uuid4()
+        meetings = [self._meeting_public(), self._meeting_public()]
+        self.service.list_meetings.return_value = build_paginated_response(
+            meetings,
+            page=2,
+            page_size=2,
+            total=5,
+        )
+
+        response = self.client.get(
+            "/meetings",
+            params={
+                "organization_id": str(organization_id),
+                "page": 2,
+                "page_size": 2,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.json()["items"]], [
+            meeting.id for meeting in meetings
+        ])
+        self.assertEqual(
+            response.json()["pagination"],
+            {"page": 2, "page_size": 2, "total": 5, "total_pages": 3},
+        )
+        self.service.list_meetings.assert_awaited_once_with(
+            str(organization_id),
+            page=2,
+            limit=2,
+            offset=2,
+        )
+        self.service.create_meeting.assert_not_called()
+        self.service.get_meeting.assert_not_called()
+
+    def test_list_meetings_returns_empty_page(self) -> None:
+        from shared.schemas.pagination import build_paginated_response
+
+        self.service.list_meetings.return_value = build_paginated_response(
+            [],
+            page=1,
+            page_size=20,
+            total=0,
+        )
+
+        response = self.client.get(
+            "/meetings",
+            params={"organization_id": str(uuid.uuid4())},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"], [])
+        self.assertEqual(
+            response.json()["pagination"],
+            {"page": 1, "page_size": 20, "total": 0, "total_pages": 0},
+        )
+
+    def test_list_meetings_invalid_organization_id_uses_standard_validation_response(
+        self,
+    ) -> None:
+        from shared.exceptions.common import ValidationError
+
+        self.service.list_meetings.side_effect = ValidationError(
+            "Invalid organization ID."
+        )
+
+        response = self.client.get(
+            "/meetings",
+            params={"organization_id": "not-a-uuid"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+        self.assertEqual(
+            response.json()["error"]["message"], "Invalid organization ID."
+        )
+
+    def test_list_meetings_rejects_invalid_pagination_before_calling_service(self) -> None:
+        response = self.client.get(
+            "/meetings",
+            params={"organization_id": str(uuid.uuid4()), "page": 0},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.service.list_meetings.assert_not_called()
 
     def test_missing_meeting_uses_standard_not_found_response(self) -> None:
         from shared.exceptions.common import NotFoundError

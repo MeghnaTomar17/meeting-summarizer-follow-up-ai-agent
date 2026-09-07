@@ -60,6 +60,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.meeting_repository.create = AsyncMock()
         self.meeting_repository.get_by_id = AsyncMock()
         self.meeting_repository.list_by_organization = AsyncMock()
+        self.meeting_repository.count_by_organization = AsyncMock()
         self.meeting_repository.update_status = AsyncMock()
         self.transcript_repository.create = AsyncMock()
         self.transcript_repository.get_by_meeting_id = AsyncMock()
@@ -149,19 +150,33 @@ class MeetingServiceTestCase(unittest.TestCase):
 
         self.session.commit.assert_not_called()
 
-    def test_list_meetings_passes_pagination_and_does_not_commit(self) -> None:
+    def test_list_meetings_builds_paginated_response_without_commit(self) -> None:
         organization_id = uuid.uuid4()
-        self.meeting_repository.list_by_organization.return_value = [self._meeting()]
+        meeting = self._meeting()
+        self.meeting_repository.list_by_organization.return_value = [meeting]
+        self.meeting_repository.count_by_organization.return_value = 41
 
-        results = asyncio.run(
-            self.service.list_meetings(str(organization_id), limit=20, offset=40)
+        result = asyncio.run(
+            self.service.list_meetings(
+                str(organization_id),
+                page=3,
+                limit=20,
+                offset=40,
+            )
         )
 
-        self.assertEqual(len(results), 1)
+        self.assertEqual([item.id for item in result.items], [str(meeting.id)])
+        self.assertEqual(result.pagination.page, 3)
+        self.assertEqual(result.pagination.page_size, 20)
+        self.assertEqual(result.pagination.total, 41)
+        self.assertEqual(result.pagination.total_pages, 3)
         self.meeting_repository.list_by_organization.assert_awaited_once_with(
             organization_id,
             limit=20,
             offset=40,
+        )
+        self.meeting_repository.count_by_organization.assert_awaited_once_with(
+            organization_id
         )
         self.session.commit.assert_not_called()
 
