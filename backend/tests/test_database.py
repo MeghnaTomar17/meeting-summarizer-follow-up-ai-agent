@@ -217,6 +217,33 @@ class DatabaseFoundationTestCase(unittest.TestCase):
         env_source = (MIGRATIONS_ROOT / "env.py").read_text(encoding="utf-8")
         self.assertIn("get_base_settings().database_url", env_source)
 
+    def test_meeting_models_register_expected_metadata(self) -> None:
+        import shared.database.models  # noqa: F401
+        from shared.database.base import Base
+        from shared.database.models.meeting import Meeting
+
+        self.assertEqual(set(Base.metadata.tables), {"meetings", "transcripts"})
+        self.assertEqual(Meeting.__table__.c.status.type.enums, [
+            "pending",
+            "processing",
+            "ready",
+            "failed",
+        ])
+
+    def test_initial_meeting_schema_revision_exists(self) -> None:
+        revision_path = (
+            MIGRATIONS_ROOT
+            / "versions"
+            / "0001_create_meetings_and_transcripts.py"
+        )
+        source = revision_path.read_text(encoding="utf-8")
+
+        self.assertTrue(revision_path.is_file())
+        self.assertIn('revision: str = "0001_meetings_transcripts"', source)
+        self.assertIn('op.create_table(\n        "meetings"', source)
+        self.assertIn('op.create_table(\n        "transcripts"', source)
+        self.assertIn('ondelete="CASCADE"', source)
+
 
 MEETING_ROOT = BACKEND_ROOT / "meeting-service"
 

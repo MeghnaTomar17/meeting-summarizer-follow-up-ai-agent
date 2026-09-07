@@ -1,6 +1,7 @@
 # PostgreSQL Tables
 
-> Documentation only — ORM models in `backend/shared/database/models/` (TODO), API DTOs in `backend/shared/schemas/`.
+> `meetings` and `transcripts` are implemented by ORM models in
+> `backend/shared/database/models/`; API DTOs remain in `backend/shared/schemas/`.
 
 ## users
 
@@ -16,7 +17,8 @@
 ## meetings
 
 - **Purpose:** Meeting metadata, status, participants.
-- **Key columns:** `id` (UUID PK), `organization_id` (FK), `created_by` (FK → users), `title`, `status`, `scheduled_at`, `created_at`, `updated_at`.
+- **Key columns:** `id` (UUID PK), `organization_id`, `created_by`, `title`, `description`, `participants` (JSONB), `status` (`meeting_status` enum), `scheduled_at`, `created_at`, `updated_at`.
+- **Current constraint:** `organization_id` and `created_by` are UUID ownership fields; user and organization tables are not modeled yet, so no foreign keys exist for them in the initial revision.
 - **TODO:** `recording_url`, `duration_seconds`, soft-delete via `deleted_at`.
 
 ## transcripts

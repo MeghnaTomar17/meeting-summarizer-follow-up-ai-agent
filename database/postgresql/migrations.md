@@ -43,6 +43,10 @@ alembic -c alembic.ini revision --autogenerate -m "describe change"
 - Forward-only migrations in CI; rollbacks documented in runbooks
 - One canonical migration system for the entire platform
 
-## Phase 2.5 note
+## Current revision
 
-Migration infrastructure is initialized. No business-table revisions exist yet. The first migration will be created when ORM models are implemented in their feature phases.
+`0001_meetings_transcripts` is the initial domain-schema revision. It
+creates the `meeting_status` PostgreSQL enum, the `meetings` and `transcripts`
+tables, their lookup indexes, and the cascading transcript-to-meeting foreign
+key. It has not been applied automatically; use `upgrade head` against an
+intended PostgreSQL database.

@@ -1,6 +1,6 @@
 # Database Architecture
 
-> MannerAI Meetings Platform — Phase 2.5 PostgreSQL persistence foundation.
+> MannerAI Meetings Platform — PostgreSQL persistence and initial domain schema.
 
 ## Stack
 
@@ -23,7 +23,7 @@ PostgreSQL
 | Async engine | `backend/shared/database/engine.py` |
 | Session factory + dependency | `backend/shared/database/session.py` |
 | Connectivity helper | `backend/shared/database/health.py` |
-| ORM models (future) | `backend/shared/database/models/` |
+| ORM models | `backend/shared/database/models/` |
 | Alembic migrations | `backend/migrations/` |
 | Pydantic API schemas | `backend/shared/schemas/` (separate layer) |
 
@@ -103,7 +103,7 @@ CREATE DATABASE mannerai_meetings;
 - Readiness failures return safe messages — no raw PostgreSQL errors to clients.
 - ORM models must not be exposed as API `response_model` — use Pydantic `*Public` schemas.
 
-## Future model conventions
+## ORM model conventions
 
 - UUID primary keys via `UUIDPrimaryKeyMixin`
 - Timestamps via `TimestampMixin` (`TIMESTAMPTZ`)
