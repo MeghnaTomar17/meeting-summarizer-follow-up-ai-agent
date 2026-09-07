@@ -132,6 +132,19 @@ class RepositoryTestCase(unittest.TestCase):
         self.session.commit.assert_not_called()
         self.session.rollback.assert_not_called()
 
+    def test_meeting_update_flushes_and_returns_supplied_entity(self) -> None:
+        meeting = self._meeting()
+        meeting.title = "Updated weekly sync"
+        repository = self.MeetingRepository(self.session)
+
+        updated = asyncio.run(repository.update(meeting))
+
+        self.assertIs(updated, meeting)
+        self.assertEqual(updated.title, "Updated weekly sync")
+        self.session.flush.assert_awaited_once()
+        self.session.commit.assert_not_called()
+        self.session.rollback.assert_not_called()
+
     def test_meeting_update_status_flushes_without_commit(self) -> None:
         meeting = self._meeting()
         repository = self.MeetingRepository(self.session)

@@ -13,7 +13,7 @@ from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingS
 from shared.database.models.transcript import Transcript
 from shared.exceptions.common import ConflictError, NotFoundError
 from shared.exceptions.common import ValidationError as AppValidationError
-from shared.schemas.meeting import MeetingCreate, MeetingPublic
+from shared.schemas.meeting import MeetingCreate, MeetingPublic, MeetingUpdate
 from shared.schemas.meeting import MeetingStatus as SchemaMeetingStatus
 from shared.schemas.pagination import PaginatedResponse, build_paginated_response
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
@@ -91,6 +91,24 @@ class MeetingService:
             meeting,
             self._to_orm_status(status),
         )
+        await self._session.commit()
+        return self._meeting_to_public(updated)
+
+    async def update_meeting(
+        self,
+        meeting_id: str,
+        payload: MeetingUpdate,
+    ) -> MeetingPublic:
+        meeting = await self._meeting_repository.get_by_id(
+            self._parse_uuid(meeting_id, "meeting ID")
+        )
+        if meeting is None:
+            raise NotFoundError("Meeting not found.")
+
+        for field_name, value in payload.model_dump(exclude_unset=True).items():
+            setattr(meeting, field_name, value)
+
+        updated = await self._meeting_repository.update(meeting)
         await self._session.commit()
         return self._meeting_to_public(updated)
 

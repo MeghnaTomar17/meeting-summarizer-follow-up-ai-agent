@@ -56,6 +56,10 @@ class MeetingRepository:
         result = await self._session.execute(statement)
         return result.scalar_one()
 
+    async def update(self, meeting: Meeting) -> Meeting:
+        await self._session.flush()
+        return meeting
+
     async def update_status(
         self,
         meeting: Meeting,

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         from shared.database.models.transcript import Transcript
         from shared.exceptions.common import ConflictError, NotFoundError
         from shared.exceptions.common import ValidationError as AppValidationError
-        from shared.schemas.meeting import MeetingCreate, MeetingStatus
+        from shared.schemas.meeting import MeetingCreate, MeetingStatus, MeetingUpdate
         from shared.schemas.transcript import TranscriptBase, TranscriptSegment
 
         self.Meeting = Meeting
@@ -50,6 +51,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.AppValidationError = AppValidationError
         self.MeetingCreate = MeetingCreate
         self.MeetingStatus = MeetingStatus
+        self.MeetingUpdate = MeetingUpdate
         self.TranscriptBase = TranscriptBase
         self.TranscriptSegment = TranscriptSegment
 
@@ -61,6 +63,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.meeting_repository.get_by_id = AsyncMock()
         self.meeting_repository.list_by_organization = AsyncMock()
         self.meeting_repository.count_by_organization = AsyncMock()
+        self.meeting_repository.update = AsyncMock()
         self.meeting_repository.update_status = AsyncMock()
         self.transcript_repository.create = AsyncMock()
         self.transcript_repository.get_by_meeting_id = AsyncMock()
@@ -213,6 +216,104 @@ class MeetingServiceTestCase(unittest.TestCase):
 
         self.meeting_repository.update_status.assert_not_called()
         self.session.commit.assert_not_called()
+
+    def test_update_meeting_applies_only_supplied_fields_and_commits_once(self) -> None:
+        meeting = self._meeting()
+        meeting.description = "Existing description"
+        meeting.scheduled_at = datetime(2026, 9, 7, tzinfo=timezone.utc)
+        meeting.participants = ["alice@example.com"]
+        self.meeting_repository.get_by_id.return_value = meeting
+        self.meeting_repository.update.return_value = meeting
+        payload = self.MeetingUpdate(
+            title="Updated weekly sync",
+            participants=["bob@example.com"],
+        )
+
+        result = asyncio.run(self.service.update_meeting(str(meeting.id), payload))
+
+        self.assertEqual(meeting.title, "Updated weekly sync")
+        self.assertEqual(meeting.participants, ["bob@example.com"])
+        self.assertEqual(meeting.description, "Existing description")
+        self.assertEqual(
+            meeting.scheduled_at,
+            datetime(2026, 9, 7, tzinfo=timezone.utc),
+        )
+        self.meeting_repository.get_by_id.assert_awaited_once_with(meeting.id)
+        self.meeting_repository.update.assert_awaited_once_with(meeting)
+        self.session.commit.assert_awaited_once()
+        self.session.rollback.assert_not_called()
+        self.assertEqual(result.id, str(meeting.id))
+        self.assertEqual(result.title, "Updated weekly sync")
+        self.assertEqual(result.description, "Existing description")
+
+    def test_meeting_update_schema_accepts_non_nullable_mutable_values(self) -> None:
+        payload = self.MeetingUpdate(
+            title="Updated weekly sync",
+            participants=["alice@example.com"],
+        )
+
+        self.assertEqual(payload.title, "Updated weekly sync")
+        self.assertEqual(payload.participants, ["alice@example.com"])
+
+    def test_meeting_update_schema_allows_clearing_nullable_fields(self) -> None:
+        payload = self.MeetingUpdate(description=None, scheduled_at=None)
+
+        self.assertEqual(
+            payload.model_dump(exclude_unset=True),
+            {"description": None, "scheduled_at": None},
+        )
+
+    def test_meeting_update_schema_rejects_null_non_nullable_fields(self) -> None:
+        with self.assertRaises(PydanticValidationError):
+            self.MeetingUpdate(title=None)
+
+        with self.assertRaises(PydanticValidationError):
+            self.MeetingUpdate(participants=None)
+
+    def test_update_meeting_missing_entity_does_not_commit(self) -> None:
+        self.meeting_repository.get_by_id.return_value = None
+
+        with self.assertRaisesRegex(self.NotFoundError, "Meeting not found."):
+            asyncio.run(
+                self.service.update_meeting(
+                    str(uuid.uuid4()),
+                    self.MeetingUpdate(title="Updated weekly sync"),
+                )
+            )
+
+        self.meeting_repository.update.assert_not_called()
+        self.session.commit.assert_not_called()
+        self.session.rollback.assert_not_called()
+
+    def test_update_meeting_invalid_uuid_does_not_query_or_commit(self) -> None:
+        with self.assertRaises(self.AppValidationError):
+            asyncio.run(
+                self.service.update_meeting(
+                    "not-a-uuid",
+                    self.MeetingUpdate(title="Updated weekly sync"),
+                )
+            )
+
+        self.meeting_repository.get_by_id.assert_not_called()
+        self.meeting_repository.update.assert_not_called()
+        self.session.commit.assert_not_called()
+        self.session.rollback.assert_not_called()
+
+    def test_update_meeting_persistence_error_propagates_without_commit(self) -> None:
+        meeting = self._meeting()
+        self.meeting_repository.get_by_id.return_value = meeting
+        self.meeting_repository.update.side_effect = RuntimeError("database failed")
+
+        with self.assertRaisesRegex(RuntimeError, "database failed"):
+            asyncio.run(
+                self.service.update_meeting(
+                    str(meeting.id),
+                    self.MeetingUpdate(title="Updated weekly sync"),
+                )
+            )
+
+        self.session.commit.assert_not_called()
+        self.session.rollback.assert_not_called()
 
     def test_create_transcript_converts_segments_and_commits_once(self) -> None:
         meeting = self._meeting()

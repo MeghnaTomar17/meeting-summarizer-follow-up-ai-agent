@@ -47,6 +47,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.service.create_meeting = AsyncMock()
         self.service.get_meeting = AsyncMock()
         self.service.list_meetings = AsyncMock()
+        self.service.update_meeting = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
         self.client = TestClient(self.app, raise_server_exceptions=False)
 
@@ -221,6 +222,84 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
         self.assertEqual(response.json()["error"]["message"], "Invalid meeting ID.")
+
+    def test_update_meeting_returns_dto_from_service(self) -> None:
+        meeting_id = uuid.uuid4()
+        updated = self._meeting_public(meeting_id)
+        updated.title = "Updated planning meeting"
+        self.service.update_meeting.return_value = updated
+        payload = {"title": "Updated planning meeting"}
+
+        response = self.client.patch(f"/meetings/{meeting_id}", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], str(meeting_id))
+        self.assertEqual(response.json()["title"], "Updated planning meeting")
+        submitted = self.service.update_meeting.await_args.args
+        self.assertEqual(submitted[0], str(meeting_id))
+        self.assertEqual(submitted[1].model_dump(exclude_unset=True), payload)
+        self.service.create_meeting.assert_not_called()
+        self.service.get_meeting.assert_not_called()
+        self.service.list_meetings.assert_not_called()
+
+    def test_update_missing_meeting_uses_standard_not_found_response(self) -> None:
+        from shared.exceptions.common import NotFoundError
+
+        self.service.update_meeting.side_effect = NotFoundError("Meeting not found.")
+
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}",
+            json={"title": "Updated planning meeting"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"]["code"], "NOT_FOUND")
+        self.assertEqual(response.json()["error"]["message"], "Meeting not found.")
+
+    def test_update_invalid_meeting_id_uses_standard_validation_response(self) -> None:
+        from shared.exceptions.common import ValidationError
+
+        self.service.update_meeting.side_effect = ValidationError("Invalid meeting ID.")
+
+        response = self.client.patch(
+            "/meetings/not-a-uuid",
+            json={"title": "Updated planning meeting"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+        self.assertEqual(response.json()["error"]["message"], "Invalid meeting ID.")
+
+    def test_update_rejects_null_title_before_calling_service(self) -> None:
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}",
+            json={"title": None},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+        self.service.update_meeting.assert_not_called()
+
+    def test_update_rejects_null_participants_before_calling_service(self) -> None:
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}",
+            json={"participants": None},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+        self.service.update_meeting.assert_not_called()
+
+    def test_update_unexpected_error_uses_safe_standard_response(self) -> None:
+        self.service.update_meeting.side_effect = RuntimeError("database failed")
+
+        response = self.client.patch(
+            f"/meetings/{uuid.uuid4()}",
+            json={"title": "Updated planning meeting"},
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["error"]["code"], "INTERNAL_SERVER_ERROR")
 
 
 if __name__ == "__main__":

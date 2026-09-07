@@ -31,6 +31,15 @@ class MeetingCreate(MeetingBase):
     created_by: str
 
 
+class MeetingUpdate(BaseModel):
+    """Partial update payload for mutable meeting details."""
+
+    title: str = Field(default_factory=str)
+    description: str | None = None
+    scheduled_at: datetime | None = None
+    participants: list[str] = Field(default_factory=list)
+
+
 class MeetingInDB(MeetingBase):
     id: str
     organization_id: str
