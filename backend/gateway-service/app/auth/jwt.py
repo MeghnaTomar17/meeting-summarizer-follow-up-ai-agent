@@ -6,16 +6,34 @@ Service ownership: gateway-service.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timedelta, timezone
+
+from jose import jwt
 
 
-def create_access_token(subject: str, extra_claims: dict[str, Any] | None = None) -> str:
-    """Create JWT access token — TODO: implement with python-jose."""
-    _ = (subject, extra_claims)
-    raise NotImplementedError
+def create_access_token(
+    subject: str,
+    *,
+    secret: str,
+    algorithm: str,
+    expires_minutes: int,
+) -> str:
+    """Create a signed, expiring access token for one authenticated user."""
+    issued_at = datetime.now(timezone.utc)
+    payload = {
+        "sub": subject,
+        "type": "access",
+        "iat": issued_at,
+        "exp": issued_at + timedelta(minutes=expires_minutes),
+    }
+    return jwt.encode(payload, secret, algorithm=algorithm)
 
 
-def decode_access_token(token: str) -> dict[str, Any]:
-    """Decode and validate JWT — TODO: implement."""
-    _ = token
-    raise NotImplementedError
+def decode_access_token(
+    token: str,
+    *,
+    secret: str,
+    algorithm: str,
+) -> dict[str, object]:
+    """Decode and validate a signed access token for internal verification tests."""
+    return jwt.decode(token, secret, algorithms=[algorithm])

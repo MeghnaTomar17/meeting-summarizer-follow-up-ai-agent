@@ -6,10 +6,13 @@ Service ownership: gateway-service.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.v1.router import api_v1_router
 from app.config.settings import get_settings
+from app.database import shutdown_database, startup_database
 from app.openapi import configure_gateway_openapi
 from shared.api.constants import API_V1_PREFIX
 from shared.utils.health import health_payload
@@ -20,6 +23,17 @@ from shared.utils.service_bootstrap import (
 )
 
 init_service_logging(get_settings)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    settings = get_settings()
+    await startup_database(settings)
+    try:
+        yield
+    finally:
+        await shutdown_database()
+
 
 app = FastAPI(
     title="MannerAI Meetings Platform API",
@@ -38,6 +52,7 @@ app = FastAPI(
         {"name": "integrations", "description": "Third-party integrations and webhooks"},
         {"name": "health", "description": "Infrastructure health probes"},
     ],
+    lifespan=lifespan,
 )
 
 register_logging_middleware(app)
@@ -46,9 +61,8 @@ configure_gateway_openapi(app)
 
 app.include_router(api_v1_router)
 
-# TODO: include_router auth, users, meetings, search, analytics, integrations on api_v1_router
+# TODO: include_router users, meetings, search, analytics, integrations on api_v1_router
 # TODO: CORS, rate limiting
-# TODO: lifespan — postgres/redis init via shared.database
 
 
 @app.get("/health", tags=["health"], include_in_schema=False)

@@ -17,4 +17,3 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    # TODO: refresh_token, expires_in

@@ -13,8 +13,6 @@ from pydantic import BaseModel, EmailStr, Field
 
 class UserBase(BaseModel):
     email: EmailStr
-    full_name: str | None = None
-    organization_id: str | None = None
 
 
 class UserCreate(UserBase):
@@ -23,7 +21,7 @@ class UserCreate(UserBase):
 
 class UserInDB(UserBase):
     id: str
-    hashed_password: str
+    password_hash: str
     created_at: datetime
     updated_at: datetime
 

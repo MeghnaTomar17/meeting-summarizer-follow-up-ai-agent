@@ -136,7 +136,7 @@ class ApiDesignTestCase(unittest.TestCase):
         self.assertEqual(payload["pagination"]["total"], 1)
         self.assertEqual(payload["pagination"]["total_pages"], 1)
 
-    def test_user_public_excludes_hashed_password(self) -> None:
+    def test_user_public_excludes_password_hash(self) -> None:
         user_schema_path = BACKEND_ROOT / "shared" / "schemas" / "user.py"
         module = ast.parse(user_schema_path.read_text(encoding="utf-8"))
         class_fields: dict[str, set[str]] = {}
@@ -150,8 +150,8 @@ class ApiDesignTestCase(unittest.TestCase):
                 }
                 class_fields[node.name] = fields
 
-        self.assertIn("hashed_password", class_fields["UserInDB"])
-        self.assertNotIn("hashed_password", class_fields["UserPublic"])
+        self.assertIn("password_hash", class_fields["UserInDB"])
+        self.assertNotIn("password_hash", class_fields["UserPublic"])
 
     def test_meeting_public_excludes_internal_fields(self) -> None:
         from shared.schemas.meeting import MeetingInDB, MeetingPublic

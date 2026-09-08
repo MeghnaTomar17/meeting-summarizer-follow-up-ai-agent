@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.routes.auth import router as auth_router
 from shared.api.constants import API_V1_PREFIX
 
 api_v1_router = APIRouter(prefix=API_V1_PREFIX)
+api_v1_router.include_router(auth_router)
 
 # Future business routers mount here, for example:
-# api_v1_router.include_router(auth.router)
 # api_v1_router.include_router(users.router)
 # api_v1_router.include_router(meetings.router)
 # api_v1_router.include_router(search.router)
