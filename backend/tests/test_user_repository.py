@@ -109,6 +109,18 @@ class UserRepositoryTestCase(unittest.TestCase):
         self.session.commit.assert_not_called()
         self.session.rollback.assert_not_called()
 
+    def test_update_flushes_without_transaction_control(self) -> None:
+        user = self._user()
+        repository = self.UserRepository(self.session)
+
+        result = asyncio.run(repository.update(user))
+
+        self.assertIs(result, user)
+        self.session.add.assert_called_once_with(user)
+        self.session.flush.assert_awaited_once()
+        self.session.commit.assert_not_called()
+        self.session.rollback.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

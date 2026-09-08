@@ -30,3 +30,8 @@ class UserRepository:
         statement = select(User).where(User.email == email)
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def update(self, user: User) -> User:
+        self._session.add(user)
+        await self._session.flush()
+        return user

@@ -9,10 +9,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_current_user
 from app.config.settings import get_settings
 from app.repositories.user_repository import UserRepository
+from app.routes.users import get_user_service
 from app.schemas.auth import LoginRequest, TokenResponse
 from app.services.authentication_service import AuthenticationService
+from app.services.user_service import UserService
+from shared.database.models.user import User
 from shared.database.session import get_db_session
 from shared.schemas.user import UserCreate, UserPublic
 
@@ -42,3 +46,12 @@ async def login(
 ) -> TokenResponse:
     """Authenticate credentials and issue an access token."""
     return await service.login(payload)
+
+
+@router.get("/me", response_model=UserPublic)
+async def get_authenticated_user(
+    current_user: User = Depends(get_current_user),
+    service: UserService = Depends(get_user_service),
+) -> UserPublic:
+    """Return the current external-access-token user's public profile."""
+    return await service.get_current_user(current_user)

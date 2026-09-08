@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class UserBase(BaseModel):
@@ -17,6 +17,14 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(min_length=8)
+
+
+class UserUpdate(BaseModel):
+    """The only currently supported self-service profile update."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
 
 
 class UserInDB(UserBase):
