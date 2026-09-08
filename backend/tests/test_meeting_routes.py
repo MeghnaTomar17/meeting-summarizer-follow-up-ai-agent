@@ -43,6 +43,9 @@ class MeetingRouteTestCase(unittest.TestCase):
             app_env=AppEnv.DEVELOPMENT,
         )
         self.app, self.service_dependency = _load_meeting_app()
+        from app.auth.dependencies import get_authenticated_user_id
+
+        self.authenticated_user_id = uuid.uuid4()
         self.service = MagicMock()
         self.service.create_meeting = AsyncMock()
         self.service.get_meeting = AsyncMock()
@@ -50,6 +53,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.service.update_meeting = AsyncMock()
         self.service.update_meeting_status = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
+        self.app.dependency_overrides[get_authenticated_user_id] = lambda: self.authenticated_user_id
         self.client = TestClient(self.app, raise_server_exceptions=False)
 
     def tearDown(self) -> None:
@@ -60,7 +64,6 @@ class MeetingRouteTestCase(unittest.TestCase):
     def _meeting_payload() -> dict[str, object]:
         return {
             "organization_id": str(uuid.uuid4()),
-            "created_by": str(uuid.uuid4()),
             "title": "Planning meeting",
             "description": "Quarterly planning",
             "participants": ["alice@example.com"],
@@ -87,6 +90,16 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.assertIn("/meetings/{meeting_id}", paths)
         self.assertIn("/meetings/{meeting_id}/status", paths)
 
+    def test_missing_internal_principal_is_unauthorized(self) -> None:
+        from app.auth.dependencies import get_authenticated_user_id
+
+        self.app.dependency_overrides.pop(get_authenticated_user_id)
+        response = self.client.get(f"/meetings/{uuid.uuid4()}")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["error"]["code"], "UNAUTHORIZED")
+        self.service.get_meeting.assert_not_called()
+
     def test_create_meeting_returns_created_dto_from_service(self) -> None:
         created = self._meeting_public()
         self.service.create_meeting.return_value = created
@@ -110,7 +123,7 @@ class MeetingRouteTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], str(meeting_id))
-        self.service.get_meeting.assert_awaited_once_with(str(meeting_id))
+        self.service.get_meeting.assert_awaited_once_with(str(meeting_id), self.authenticated_user_id)
         self.service.create_meeting.assert_not_called()
 
     def test_list_meetings_returns_paginated_dtos_and_forwards_pagination(self) -> None:
@@ -321,6 +334,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.service.update_meeting_status.assert_awaited_once_with(
             str(meeting_id),
             MeetingStatus.PROCESSING,
+            self.authenticated_user_id,
         )
         self.service.update_meeting.assert_not_called()
 
@@ -342,6 +356,7 @@ class MeetingRouteTestCase(unittest.TestCase):
                 self.service.update_meeting_status.assert_awaited_once_with(
                     str(meeting_id),
                     status_value,
+                    self.authenticated_user_id,
                 )
 
     def test_update_status_rejects_invalid_status_before_calling_service(self) -> None:

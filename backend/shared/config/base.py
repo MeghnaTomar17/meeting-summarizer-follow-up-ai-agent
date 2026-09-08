@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from pydantic import Field, field_validator
 from pydantic_settings import (
@@ -78,6 +78,12 @@ class SharedSettings(BaseSettings):
     database_echo: bool = False
 
     redis_url: str = "redis://localhost:6379/0"
+
+    # Non-secret conventions for Gateway-issued service-to-service assertions.
+    # Signing and verification keys are intentionally service-specific.
+    internal_principal_algorithm: Literal["RS256"] = "RS256"
+    internal_principal_issuer: str = "gateway-service"
+    internal_principal_expire_seconds: int = Field(default=60, ge=1, le=300)
 
     @field_validator("log_level")
     @classmethod

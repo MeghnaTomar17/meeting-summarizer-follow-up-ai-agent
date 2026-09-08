@@ -11,9 +11,9 @@ from app.repositories.meeting_repository import MeetingRepository
 from app.repositories.transcript_repository import TranscriptRepository
 from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingStatus
 from shared.database.models.transcript import Transcript
-from shared.exceptions.common import ConflictError, NotFoundError
+from shared.exceptions.common import ConflictError, ForbiddenError, NotFoundError
 from shared.exceptions.common import ValidationError as AppValidationError
-from shared.schemas.meeting import MeetingCreate, MeetingPublic, MeetingUpdate
+from shared.schemas.meeting import MeetingCreateRequest, MeetingPublic, MeetingUpdate
 from shared.schemas.meeting import MeetingStatus as SchemaMeetingStatus
 from shared.schemas.pagination import PaginatedResponse, build_paginated_response
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
@@ -32,10 +32,14 @@ class MeetingService:
         self._meeting_repository = meeting_repository
         self._transcript_repository = transcript_repository
 
-    async def create_meeting(self, payload: MeetingCreate) -> MeetingPublic:
+    async def create_meeting(
+        self,
+        payload: MeetingCreateRequest,
+        authenticated_user_id: UUID,
+    ) -> MeetingPublic:
         meeting = Meeting(
             organization_id=self._parse_uuid(payload.organization_id, "organization ID"),
-            created_by=self._parse_uuid(payload.created_by, "creator ID"),
+            created_by=authenticated_user_id,
             title=payload.title,
             description=payload.description,
             scheduled_at=payload.scheduled_at,
@@ -46,12 +50,12 @@ class MeetingService:
         await self._session.commit()
         return self._meeting_to_public(created)
 
-    async def get_meeting(self, meeting_id: str) -> MeetingPublic:
-        meeting = await self._meeting_repository.get_by_id(
-            self._parse_uuid(meeting_id, "meeting ID")
-        )
-        if meeting is None:
-            raise NotFoundError("Meeting not found.")
+    async def get_meeting(
+        self,
+        meeting_id: str,
+        authenticated_user_id: UUID,
+    ) -> MeetingPublic:
+        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
         return self._meeting_to_public(meeting)
 
     async def list_meetings(
@@ -80,12 +84,9 @@ class MeetingService:
         self,
         meeting_id: str,
         status: SchemaMeetingStatus,
+        authenticated_user_id: UUID,
     ) -> MeetingPublic:
-        meeting = await self._meeting_repository.get_by_id(
-            self._parse_uuid(meeting_id, "meeting ID")
-        )
-        if meeting is None:
-            raise NotFoundError("Meeting not found.")
+        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
 
         updated = await self._meeting_repository.update_status(
             meeting,
@@ -98,12 +99,9 @@ class MeetingService:
         self,
         meeting_id: str,
         payload: MeetingUpdate,
+        authenticated_user_id: UUID,
     ) -> MeetingPublic:
-        meeting = await self._meeting_repository.get_by_id(
-            self._parse_uuid(meeting_id, "meeting ID")
-        )
-        if meeting is None:
-            raise NotFoundError("Meeting not found.")
+        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
 
         for field_name, value in payload.model_dump(exclude_unset=True).items():
             setattr(meeting, field_name, value)
@@ -112,11 +110,13 @@ class MeetingService:
         await self._session.commit()
         return self._meeting_to_public(updated)
 
-    async def create_transcript(self, payload: TranscriptBase) -> TranscriptInDB:
+    async def create_transcript(
+        self,
+        payload: TranscriptBase,
+        authenticated_user_id: UUID,
+    ) -> TranscriptInDB:
         meeting_id = self._parse_uuid(payload.meeting_id, "meeting ID")
-        meeting = await self._meeting_repository.get_by_id(meeting_id)
-        if meeting is None:
-            raise NotFoundError("Meeting not found.")
+        await self._get_owned_meeting(str(meeting_id), authenticated_user_id)
 
         existing = await self._transcript_repository.get_by_meeting_id(meeting_id)
         if existing is not None:
@@ -131,10 +131,13 @@ class MeetingService:
         await self._session.commit()
         return self._transcript_to_in_db(created)
 
-    async def get_transcript(self, meeting_id: str) -> TranscriptInDB:
-        transcript = await self._transcript_repository.get_by_meeting_id(
-            self._parse_uuid(meeting_id, "meeting ID")
-        )
+    async def get_transcript(
+        self,
+        meeting_id: str,
+        authenticated_user_id: UUID,
+    ) -> TranscriptInDB:
+        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
+        transcript = await self._transcript_repository.get_by_meeting_id(meeting.id)
         if transcript is None:
             raise NotFoundError("Transcript not found.")
         return self._transcript_to_in_db(transcript)
@@ -145,10 +148,10 @@ class MeetingService:
         *,
         segments: list[TranscriptSegment],
         language: str | None,
+        authenticated_user_id: UUID,
     ) -> TranscriptInDB:
-        transcript = await self._transcript_repository.get_by_meeting_id(
-            self._parse_uuid(meeting_id, "meeting ID")
-        )
+        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
+        transcript = await self._transcript_repository.get_by_meeting_id(meeting.id)
         if transcript is None:
             raise NotFoundError("Transcript not found.")
 
@@ -166,6 +169,20 @@ class MeetingService:
             return UUID(value)
         except ValueError as error:
             raise AppValidationError(f"Invalid {field_name}.") from error
+
+    async def _get_owned_meeting(
+        self,
+        meeting_id: str,
+        authenticated_user_id: UUID,
+    ) -> Meeting:
+        meeting = await self._meeting_repository.get_by_id(
+            self._parse_uuid(meeting_id, "meeting ID")
+        )
+        if meeting is None:
+            raise NotFoundError("Meeting not found.")
+        if meeting.created_by != authenticated_user_id:
+            raise ForbiddenError()
+        return meeting
 
     @staticmethod
     def _to_orm_status(status: SchemaMeetingStatus) -> ORMMeetingStatus:

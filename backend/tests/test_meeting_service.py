@@ -38,18 +38,19 @@ class MeetingServiceTestCase(unittest.TestCase):
         from app.repositories.transcript_repository import TranscriptRepository
         from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingStatus
         from shared.database.models.transcript import Transcript
-        from shared.exceptions.common import ConflictError, NotFoundError
+        from shared.exceptions.common import ConflictError, ForbiddenError, NotFoundError
         from shared.exceptions.common import ValidationError as AppValidationError
-        from shared.schemas.meeting import MeetingCreate, MeetingStatus, MeetingUpdate
+        from shared.schemas.meeting import MeetingCreateRequest, MeetingStatus, MeetingUpdate
         from shared.schemas.transcript import TranscriptBase, TranscriptSegment
 
         self.Meeting = Meeting
         self.ORMMeetingStatus = ORMMeetingStatus
         self.Transcript = Transcript
         self.ConflictError = ConflictError
+        self.ForbiddenError = ForbiddenError
         self.NotFoundError = NotFoundError
         self.AppValidationError = AppValidationError
-        self.MeetingCreate = MeetingCreate
+        self.MeetingCreateRequest = MeetingCreateRequest
         self.MeetingStatus = MeetingStatus
         self.MeetingUpdate = MeetingUpdate
         self.TranscriptBase = TranscriptBase
@@ -73,13 +74,14 @@ class MeetingServiceTestCase(unittest.TestCase):
             self.meeting_repository,
             self.transcript_repository,
         )
+        self.user_id = uuid.uuid4()
 
     def _meeting(self) -> object:
         now = datetime.now(timezone.utc)
         return self.Meeting(
             id=uuid.uuid4(),
             organization_id=uuid.uuid4(),
-            created_by=uuid.uuid4(),
+            created_by=self.user_id,
             title="Weekly sync",
             participants=["alice@example.com"],
             status=self.ORMMeetingStatus.PENDING,
@@ -100,36 +102,33 @@ class MeetingServiceTestCase(unittest.TestCase):
 
     def test_create_meeting_maps_payload_and_commits_once(self) -> None:
         organization_id = uuid.uuid4()
-        created_by = uuid.uuid4()
         created = self._meeting()
         self.meeting_repository.create.return_value = created
-        payload = self.MeetingCreate(
+        payload = self.MeetingCreateRequest(
             organization_id=str(organization_id),
-            created_by=str(created_by),
             title="Planning",
             description="Q4 planning",
             participants=["alice@example.com"],
         )
 
-        result = asyncio.run(self.service.create_meeting(payload))
+        result = asyncio.run(self.service.create_meeting(payload, self.user_id))
 
         submitted = self.meeting_repository.create.await_args.args[0]
         self.assertEqual(submitted.organization_id, organization_id)
-        self.assertEqual(submitted.created_by, created_by)
+        self.assertEqual(submitted.created_by, self.user_id)
         self.assertEqual(submitted.status, self.ORMMeetingStatus.PENDING)
         self.assertEqual(submitted.participants, ["alice@example.com"])
         self.assertEqual(result.id, str(created.id))
         self.session.commit.assert_awaited_once()
 
     def test_invalid_meeting_uuid_raises_validation_error_without_commit(self) -> None:
-        payload = self.MeetingCreate(
+        payload = self.MeetingCreateRequest(
             organization_id="not-a-uuid",
-            created_by=str(uuid.uuid4()),
             title="Planning",
         )
 
         with self.assertRaises(self.AppValidationError):
-            asyncio.run(self.service.create_meeting(payload))
+            asyncio.run(self.service.create_meeting(payload, self.user_id))
 
         self.meeting_repository.create.assert_not_called()
         self.session.commit.assert_not_called()
@@ -138,7 +137,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         meeting = self._meeting()
         self.meeting_repository.get_by_id.return_value = meeting
 
-        result = asyncio.run(self.service.get_meeting(str(meeting.id)))
+        result = asyncio.run(self.service.get_meeting(str(meeting.id), self.user_id))
 
         self.assertEqual(result.id, str(meeting.id))
         self.assertEqual(result.status, self.MeetingStatus.PENDING)
@@ -149,7 +148,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.meeting_repository.get_by_id.return_value = None
 
         with self.assertRaises(self.NotFoundError):
-            asyncio.run(self.service.get_meeting(str(uuid.uuid4())))
+            asyncio.run(self.service.get_meeting(str(uuid.uuid4()), self.user_id))
 
         self.session.commit.assert_not_called()
 
@@ -193,6 +192,7 @@ class MeetingServiceTestCase(unittest.TestCase):
             self.service.update_meeting_status(
                 str(meeting.id),
                 self.MeetingStatus.READY,
+                self.user_id,
             )
         )
 
@@ -211,6 +211,7 @@ class MeetingServiceTestCase(unittest.TestCase):
                 self.service.update_meeting_status(
                     str(uuid.uuid4()),
                     self.MeetingStatus.READY,
+                    self.user_id,
                 )
             )
 
@@ -229,7 +230,7 @@ class MeetingServiceTestCase(unittest.TestCase):
             participants=["bob@example.com"],
         )
 
-        result = asyncio.run(self.service.update_meeting(str(meeting.id), payload))
+        result = asyncio.run(self.service.update_meeting(str(meeting.id), payload, self.user_id))
 
         self.assertEqual(meeting.title, "Updated weekly sync")
         self.assertEqual(meeting.participants, ["bob@example.com"])
@@ -278,6 +279,7 @@ class MeetingServiceTestCase(unittest.TestCase):
                 self.service.update_meeting(
                     str(uuid.uuid4()),
                     self.MeetingUpdate(title="Updated weekly sync"),
+                    self.user_id,
                 )
             )
 
@@ -291,6 +293,7 @@ class MeetingServiceTestCase(unittest.TestCase):
                 self.service.update_meeting(
                     "not-a-uuid",
                     self.MeetingUpdate(title="Updated weekly sync"),
+                    self.user_id,
                 )
             )
 
@@ -309,6 +312,7 @@ class MeetingServiceTestCase(unittest.TestCase):
                 self.service.update_meeting(
                     str(meeting.id),
                     self.MeetingUpdate(title="Updated weekly sync"),
+                    self.user_id,
                 )
             )
 
@@ -327,7 +331,7 @@ class MeetingServiceTestCase(unittest.TestCase):
             language="en",
         )
 
-        result = asyncio.run(self.service.create_transcript(payload))
+        result = asyncio.run(self.service.create_transcript(payload, self.user_id))
 
         submitted = self.transcript_repository.create.await_args.args[0]
         self.assertEqual(submitted.meeting_id, meeting.id)
@@ -340,7 +344,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         payload = self.TranscriptBase(meeting_id=str(uuid.uuid4()))
 
         with self.assertRaises(self.NotFoundError):
-            asyncio.run(self.service.create_transcript(payload))
+            asyncio.run(self.service.create_transcript(payload, self.user_id))
 
         self.transcript_repository.get_by_meeting_id.assert_not_called()
         self.session.commit.assert_not_called()
@@ -354,30 +358,34 @@ class MeetingServiceTestCase(unittest.TestCase):
         payload = self.TranscriptBase(meeting_id=str(meeting.id))
 
         with self.assertRaises(self.ConflictError):
-            asyncio.run(self.service.create_transcript(payload))
+            asyncio.run(self.service.create_transcript(payload, self.user_id))
 
         self.transcript_repository.create.assert_not_called()
         self.session.commit.assert_not_called()
 
     def test_get_transcript_and_missing_transcript_do_not_commit(self) -> None:
-        transcript = self._transcript()
+        meeting = self._meeting()
+        transcript = self._transcript(meeting.id)
+        self.meeting_repository.get_by_id.return_value = meeting
         self.transcript_repository.get_by_meeting_id.return_value = transcript
 
-        result = asyncio.run(self.service.get_transcript(str(transcript.meeting_id)))
+        result = asyncio.run(self.service.get_transcript(str(transcript.meeting_id), self.user_id))
         self.assertEqual(result.id, str(transcript.id))
         self.session.commit.assert_not_called()
 
         self.transcript_repository.get_by_meeting_id.return_value = None
         with self.assertRaises(self.NotFoundError):
-            asyncio.run(self.service.get_transcript(str(uuid.uuid4())))
+            asyncio.run(self.service.get_transcript(str(meeting.id), self.user_id))
         self.session.commit.assert_not_called()
 
     def test_replace_transcript_maps_segments_and_commits_once(self) -> None:
-        transcript = self._transcript()
+        meeting = self._meeting()
+        transcript = self._transcript(meeting.id)
         updated = self._transcript(transcript.meeting_id)
         updated.segments = [{"index": 1, "text": "Ship next week."}]
         updated.language = "fr"
         self.transcript_repository.get_by_meeting_id.return_value = transcript
+        self.meeting_repository.get_by_id.return_value = meeting
         self.transcript_repository.replace_for_meeting.return_value = updated
         segments = [self.TranscriptSegment(index=1, text="Ship next week.")]
 
@@ -386,6 +394,7 @@ class MeetingServiceTestCase(unittest.TestCase):
                 str(transcript.meeting_id),
                 segments=segments,
                 language="fr",
+                authenticated_user_id=self.user_id,
             )
         )
 
@@ -398,14 +407,17 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.session.commit.assert_awaited_once()
 
     def test_replace_missing_transcript_does_not_commit(self) -> None:
+        meeting = self._meeting()
+        self.meeting_repository.get_by_id.return_value = meeting
         self.transcript_repository.get_by_meeting_id.return_value = None
 
         with self.assertRaises(self.NotFoundError):
             asyncio.run(
                 self.service.replace_transcript(
-                    str(uuid.uuid4()),
+                    str(meeting.id),
                     segments=[],
                     language="en",
+                    authenticated_user_id=self.user_id,
                 )
             )
 
@@ -414,22 +426,61 @@ class MeetingServiceTestCase(unittest.TestCase):
 
     def test_invalid_transcript_uuid_raises_validation_error_without_commit(self) -> None:
         with self.assertRaises(self.AppValidationError):
-            asyncio.run(self.service.get_transcript("not-a-uuid"))
+            asyncio.run(self.service.get_transcript("not-a-uuid", self.user_id))
 
         self.transcript_repository.get_by_meeting_id.assert_not_called()
         self.session.commit.assert_not_called()
 
     def test_persistence_errors_propagate_without_commit(self) -> None:
-        payload = self.MeetingCreate(
+        payload = self.MeetingCreateRequest(
             organization_id=str(uuid.uuid4()),
-            created_by=str(uuid.uuid4()),
             title="Planning",
         )
         self.meeting_repository.create.side_effect = RuntimeError("database failed")
 
         with self.assertRaisesRegex(RuntimeError, "database failed"):
-            asyncio.run(self.service.create_meeting(payload))
+            asyncio.run(self.service.create_meeting(payload, self.user_id))
 
+        self.session.commit.assert_not_called()
+
+    def test_non_owner_is_forbidden_without_commit(self) -> None:
+        meeting = self._meeting()
+        self.meeting_repository.get_by_id.return_value = meeting
+
+        with self.assertRaises(self.ForbiddenError):
+            asyncio.run(self.service.get_meeting(str(meeting.id), uuid.uuid4()))
+
+        self.session.commit.assert_not_called()
+        self.session.rollback.assert_not_called()
+
+    def test_non_owner_cannot_mutate_meeting_or_transcript(self) -> None:
+        meeting = self._meeting()
+        transcript = self._transcript(meeting.id)
+        intruder_id = uuid.uuid4()
+        self.meeting_repository.get_by_id.return_value = meeting
+
+        for operation in (
+            lambda: self.service.update_meeting(
+                str(meeting.id), self.MeetingUpdate(title="Not allowed"), intruder_id
+            ),
+            lambda: self.service.update_meeting_status(
+                str(meeting.id), self.MeetingStatus.READY, intruder_id
+            ),
+            lambda: self.service.create_transcript(
+                self.TranscriptBase(meeting_id=str(meeting.id)), intruder_id
+            ),
+            lambda: self.service.get_transcript(str(meeting.id), intruder_id),
+            lambda: self.service.replace_transcript(
+                str(meeting.id), segments=[], language="en", authenticated_user_id=intruder_id
+            ),
+        ):
+            with self.subTest(operation=operation), self.assertRaises(self.ForbiddenError):
+                asyncio.run(operation())
+
+        self.meeting_repository.update.assert_not_called()
+        self.meeting_repository.update_status.assert_not_called()
+        self.transcript_repository.create.assert_not_called()
+        self.transcript_repository.replace_for_meeting.assert_not_called()
         self.session.commit.assert_not_called()
 
 

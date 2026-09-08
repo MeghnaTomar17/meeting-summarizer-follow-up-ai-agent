@@ -12,6 +12,8 @@ from types import ModuleType
 from unittest.mock import patch
 
 from pydantic import SecretStr, ValidationError
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
@@ -68,6 +70,10 @@ class ConfigTestCase(unittest.TestCase):
         self.assertTrue(settings.database_echo)
         self.assertEqual(settings.database_pool_size, 25)
 
+    def test_internal_principal_algorithm_cannot_be_overridden_to_symmetric(self) -> None:
+        with self.assertRaises(ValidationError):
+            SharedSettings(internal_principal_algorithm="HS256")
+
     def test_cached_settings_behavior(self) -> None:
         first = get_base_settings()
         second = get_base_settings()
@@ -88,11 +94,52 @@ class ConfigTestCase(unittest.TestCase):
     def test_production_accepts_strong_jwt_secret(self) -> None:
         gateway_module = _load_service_settings_module("gateway-service")
         strong_secret = "a" * 32
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_key_pem = private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
         settings = gateway_module.GatewaySettings(
             app_env=AppEnv.PRODUCTION,
             jwt_secret=SecretStr(strong_secret),
+            internal_principal_private_key=SecretStr(private_key_pem),
         )
         self.assertEqual(settings.jwt_secret.get_secret_value(), strong_secret)
+        self.assertEqual(
+            settings.internal_principal_private_key.get_secret_value(), private_key_pem
+        )
+
+    def test_meeting_configuration_has_only_public_internal_principal_key(self) -> None:
+        meeting_module = _load_service_settings_module("meeting-service")
+
+        self.assertIn(
+            "internal_principal_public_key", meeting_module.MeetingSettings.model_fields
+        )
+        self.assertNotIn(
+            "internal_principal_private_key", meeting_module.MeetingSettings.model_fields
+        )
+
+    def test_production_meeting_rejects_development_public_key(self) -> None:
+        meeting_module = _load_service_settings_module("meeting-service")
+
+        with self.assertRaises(ValidationError):
+            meeting_module.MeetingSettings(app_env=AppEnv.PRODUCTION)
+
+    def test_production_meeting_accepts_real_public_key(self) -> None:
+        meeting_module = _load_service_settings_module("meeting-service")
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+
+        settings = meeting_module.MeetingSettings(
+            app_env=AppEnv.PRODUCTION,
+            internal_principal_public_key=public_key_pem,
+        )
+
+        self.assertEqual(settings.internal_principal_public_key, public_key_pem)
 
     def test_service_specific_configuration_isolation(self) -> None:
         gateway_module = _load_service_settings_module("gateway-service")

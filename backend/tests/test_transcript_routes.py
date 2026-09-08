@@ -43,11 +43,15 @@ class TranscriptRouteTestCase(unittest.TestCase):
             app_env=AppEnv.DEVELOPMENT,
         )
         self.app, self.service_dependency = _load_meeting_app()
+        from app.auth.dependencies import get_authenticated_user_id
+
+        self.authenticated_user_id = uuid.uuid4()
         self.service = MagicMock()
         self.service.create_transcript = AsyncMock()
         self.service.get_transcript = AsyncMock()
         self.service.replace_transcript = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
+        self.app.dependency_overrides[get_authenticated_user_id] = lambda: self.authenticated_user_id
         self.client = TestClient(self.app, raise_server_exceptions=False)
 
     def tearDown(self) -> None:
@@ -132,7 +136,10 @@ class TranscriptRouteTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["meeting_id"], str(meeting_id))
-        self.service.get_transcript.assert_awaited_once_with(str(meeting_id))
+        self.service.get_transcript.assert_awaited_once_with(
+            str(meeting_id),
+            self.authenticated_user_id,
+        )
 
     def test_get_missing_transcript_uses_standard_not_found_response(self) -> None:
         from shared.exceptions.common import NotFoundError
