@@ -31,6 +31,14 @@ class MeetingCreate(MeetingBase):
     created_by: str
 
 
+class MeetingCreateRequest(MeetingBase):
+    """External meeting input; ownership is derived from the authenticated user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str
+
+
 class MeetingUpdate(BaseModel):
     """Partial update payload for mutable meeting details."""
 

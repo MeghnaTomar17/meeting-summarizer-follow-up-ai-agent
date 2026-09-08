@@ -6,15 +6,18 @@ Service ownership: meeting-service.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_authenticated_user_id
 from app.repositories.meeting_repository import MeetingRepository
 from app.repositories.transcript_repository import TranscriptRepository
 from app.services.meeting_service import MeetingService
 from shared.database.session import get_db_session
 from shared.schemas.meeting import (
-    MeetingCreate,
+    MeetingCreateRequest,
     MeetingPublic,
     MeetingStatusUpdate,
     MeetingUpdate,
@@ -37,11 +40,12 @@ async def get_meeting_service(
 
 @router.post("", response_model=MeetingPublic, status_code=status.HTTP_201_CREATED)
 async def create_meeting(
-    payload: MeetingCreate,
+    payload: MeetingCreateRequest,
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     service: MeetingService = Depends(get_meeting_service),
 ) -> MeetingPublic:
     """Create a meeting through the meeting application service."""
-    return await service.create_meeting(payload)
+    return await service.create_meeting(payload, authenticated_user_id)
 
 
 @router.get("", response_model=PaginatedResponse[MeetingPublic])
@@ -62,27 +66,34 @@ async def list_meetings(
 @router.get("/{meeting_id}", response_model=MeetingPublic)
 async def get_meeting(
     meeting_id: str,
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     service: MeetingService = Depends(get_meeting_service),
 ) -> MeetingPublic:
     """Return a meeting through the meeting application service."""
-    return await service.get_meeting(meeting_id)
+    return await service.get_meeting(meeting_id, authenticated_user_id)
 
 
 @router.patch("/{meeting_id}", response_model=MeetingPublic)
 async def update_meeting(
     meeting_id: str,
     payload: MeetingUpdate,
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     service: MeetingService = Depends(get_meeting_service),
 ) -> MeetingPublic:
     """Partially update mutable meeting details through the application service."""
-    return await service.update_meeting(meeting_id, payload)
+    return await service.update_meeting(meeting_id, payload, authenticated_user_id)
 
 
 @router.patch("/{meeting_id}/status", response_model=MeetingPublic)
 async def update_meeting_status(
     meeting_id: str,
     payload: MeetingStatusUpdate,
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     service: MeetingService = Depends(get_meeting_service),
 ) -> MeetingPublic:
     """Update a meeting lifecycle status through the application service."""
-    return await service.update_meeting_status(meeting_id, payload.status)
+    return await service.update_meeting_status(
+        meeting_id,
+        payload.status,
+        authenticated_user_id,
+    )
