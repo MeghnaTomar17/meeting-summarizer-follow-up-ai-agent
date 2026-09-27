@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.config.settings import get_settings
+from app.repositories.refresh_session_repository import RefreshSessionRepository
 from app.repositories.user_repository import UserRepository
 from app.routes.users import get_user_service
-from app.schemas.auth import LoginRequest, TokenResponse
+from app.schemas.auth import LoginRequest, LogoutResponse, RefreshRequest, TokenResponse
 from app.services.authentication_service import AuthenticationService
 from app.services.user_service import UserService
 from shared.database.models.user import User
@@ -27,7 +28,9 @@ async def get_authentication_service(
     session: AsyncSession = Depends(get_db_session),
 ) -> AuthenticationService:
     """Build the request-scoped authentication application service."""
-    return AuthenticationService(session, UserRepository(session), get_settings())
+    return AuthenticationService(
+        session, UserRepository(session), get_settings(), RefreshSessionRepository(session)
+    )
 
 
 @router.post("/signup", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
@@ -46,6 +49,24 @@ async def login(
 ) -> TokenResponse:
     """Authenticate credentials and issue an access token."""
     return await service.login(payload)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(
+    payload: RefreshRequest,
+    service: AuthenticationService = Depends(get_authentication_service),
+) -> TokenResponse:
+    """Rotate a refresh token and issue a fresh access token pair."""
+    return await service.refresh(payload)
+
+
+@router.post("/logout", response_model=LogoutResponse)
+async def logout(
+    payload: RefreshRequest,
+    service: AuthenticationService = Depends(get_authentication_service),
+) -> LogoutResponse:
+    """Revoke one refresh session."""
+    return await service.logout(payload)
 
 
 @router.get("/me", response_model=UserPublic)

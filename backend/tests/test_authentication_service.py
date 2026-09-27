@@ -7,7 +7,7 @@ import importlib
 import sys
 import unittest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -44,15 +44,21 @@ class AuthenticationServiceTestCase(unittest.TestCase):
         self.repository = MagicMock()
         self.repository.get_by_email = AsyncMock()
         self.repository.create = AsyncMock()
+        self.refresh_repository = MagicMock()
+        self.refresh_repository.create = AsyncMock()
+        self.refresh_repository.update = AsyncMock()
+        self.refresh_repository.get_by_hash_for_update = AsyncMock()
         self.settings = SimpleNamespace(
             jwt_secret=SecretStr("test-secret-for-authentication-service"),
             jwt_algorithm="HS256",
             jwt_expire_minutes=60,
+            refresh_token_expire_seconds=3600,
         )
         self.service = self.module.AuthenticationService(
             self.session,
             self.repository,
             self.settings,
+            self.refresh_repository,
         )
 
         from app.schemas.auth import LoginRequest
@@ -156,8 +162,52 @@ class AuthenticationServiceTestCase(unittest.TestCase):
             expires_minutes=60,
         )
         self.assertEqual(result.access_token, "signed-token")
+        self.assertTrue(result.refresh_token)
+        self.assertNotEqual(result.refresh_token, "signed-token")
         self.assertEqual(result.token_type, "bearer")
+        self.session.commit.assert_awaited_once()
+        saved_session = self.refresh_repository.create.await_args.args[0]
+        self.assertEqual(saved_session.user_id, user.id)
+        self.assertEqual(saved_session.token_hash, self.module.AuthenticationService._hash_refresh_token(result.refresh_token))
+        self.assertNotEqual(saved_session.token_hash, result.refresh_token)
+
+    def test_refresh_rotates_token_and_revokes_previous_session(self) -> None:
+        user = self._user()
+        session = self.module.RefreshSession(
+            user_id=user.id,
+            token_hash=self.module.AuthenticationService._hash_refresh_token("old-token"),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        self.refresh_repository.get_by_hash_for_update.return_value = session
+        self.repository.get_by_id = AsyncMock(return_value=user)
+        payload = self.module.RefreshRequest(refresh_token="old-token")
+        with patch.object(self.module, "create_access_token", return_value="fresh-access"):
+            result = asyncio.run(self.service.refresh(payload))
+        self.assertEqual(result.access_token, "fresh-access")
+        self.assertNotEqual(result.refresh_token, "old-token")
+        self.assertIsNotNone(session.revoked_at)
+        self.refresh_repository.update.assert_awaited_once_with(session)
+        replacement = self.refresh_repository.create.await_args.args[0]
+        self.assertEqual(replacement.user_id, user.id)
+        self.assertEqual(self.session.commit.await_count, 1)
+
+    def test_refresh_rejects_expired_session_generically(self) -> None:
+        session = self.module.RefreshSession(
+            user_id=uuid.uuid4(), token_hash="0" * 64,
+            expires_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+        )
+        self.refresh_repository.get_by_hash_for_update.return_value = session
+        with self.assertRaises(self.UnauthorizedError) as error:
+            asyncio.run(self.service.refresh(self.module.RefreshRequest(refresh_token="expired")))
+        self.assertEqual(error.exception.message, "Invalid refresh token.")
+        self.repository.get_by_id.assert_not_called()
         self.session.commit.assert_not_called()
+
+    def test_logout_is_idempotent_and_commits(self) -> None:
+        self.refresh_repository.get_by_hash_for_update.return_value = None
+        result = asyncio.run(self.service.logout(self.module.RefreshRequest(refresh_token="unknown")))
+        self.assertTrue(result.success)
+        self.session.commit.assert_awaited_once()
 
     def test_unknown_user_and_incorrect_password_share_safe_error(self) -> None:
         payload = self.LoginRequest(email="user@example.com", password="password1")

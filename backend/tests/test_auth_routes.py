@@ -38,6 +38,8 @@ class AuthenticationRouteTestCase(unittest.TestCase):
         self.service = MagicMock()
         self.service.signup = AsyncMock()
         self.service.login = AsyncMock()
+        self.service.refresh = AsyncMock()
+        self.service.logout = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
         self.client = TestClient(self.app, raise_server_exceptions=False)
 
@@ -64,6 +66,8 @@ class AuthenticationRouteTestCase(unittest.TestCase):
         paths = {route.path for route in self.app.routes}
         self.assertIn("/api/v1/auth/signup", paths)
         self.assertIn("/api/v1/auth/login", paths)
+        self.assertIn("/api/v1/auth/refresh", paths)
+        self.assertIn("/api/v1/auth/logout", paths)
 
     def test_signup_returns_safe_public_user(self) -> None:
         user = self._user_public()
@@ -82,7 +86,7 @@ class AuthenticationRouteTestCase(unittest.TestCase):
         self.assertEqual(payload.password, "password1")
 
     def test_login_returns_token_response(self) -> None:
-        self.service.login.return_value = self.TokenResponse(access_token="signed-token")
+        self.service.login.return_value = self.TokenResponse(access_token="signed-token", refresh_token="opaque-token")
 
         response = self.client.post(
             "/api/v1/auth/login",
@@ -90,7 +94,7 @@ class AuthenticationRouteTestCase(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"access_token": "signed-token", "token_type": "bearer"})
+        self.assertEqual(response.json(), {"access_token": "signed-token", "refresh_token": "opaque-token", "token_type": "bearer"})
         payload = self.service.login.await_args.args[0]
         self.assertEqual(str(payload.email), "user@example.com")
 

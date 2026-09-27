@@ -222,7 +222,10 @@ class DatabaseFoundationTestCase(unittest.TestCase):
         from shared.database.base import Base
         from shared.database.models.meeting import Meeting
 
-        self.assertEqual(set(Base.metadata.tables), {"meetings", "transcripts", "users"})
+        self.assertEqual(
+            set(Base.metadata.tables),
+            {"meetings", "transcripts", "users", "refresh_sessions"},
+        )
         self.assertEqual(Meeting.__table__.c.status.type.enums, [
             "pending",
             "processing",

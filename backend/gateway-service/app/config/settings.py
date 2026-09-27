@@ -53,6 +53,7 @@ class GatewaySettings(SharedSettings):
     jwt_secret: SecretStr = Field(default=SecretStr(_DEV_JWT_SECRET))
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
+    refresh_token_expire_seconds: int = Field(default=2_592_000, ge=60, le=31_536_000)
     internal_principal_private_key: SecretStr = Field(
         default=SecretStr(_DEV_INTERNAL_PRINCIPAL_PRIVATE_KEY)
     )
