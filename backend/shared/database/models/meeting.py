@@ -83,3 +83,23 @@ class Meeting(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    summaries: Mapped[list["Summary"]] = relationship(
+        "Summary",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+    )
+    tasks: Mapped[list["Task"]] = relationship(
+        "Task",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+    )
+    decisions: Mapped[list["Decision"]] = relationship(
+        "Decision",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+    )
+    followups: Mapped[list["Followup"]] = relationship(
+        "Followup",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+    )

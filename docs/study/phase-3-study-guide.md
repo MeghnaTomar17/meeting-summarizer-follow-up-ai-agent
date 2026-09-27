@@ -37,7 +37,7 @@ atomically without each repository finalizing its own transaction.
 | Native PostgreSQL ENUM | `meeting_status` stores `pending`, `processing`, `ready`, `failed`. | Text plus a check constraint is more flexible, but native enum expresses a controlled lifecycle. | Add migrations carefully if states evolve. |
 | One-to-one relationship | `Transcript.meeting_id` is unique; ORM uses `uselist=False`; deletion cascades. | One-to-many supports transcript versions, which are not a current requirement. | Revisit if multiple transcript sources/versions are needed. |
 | Cascade deletion | Database FK is `ON DELETE CASCADE`; ORM also uses `delete-orphan`. | Manual deletion is error-prone. | Confirm ownership rules before adding alternate transcript references. |
-| Alembic migrations | Revision `0001_meetings_transcripts` creates the current domain schema and reverses it in dependency order. | Creating tables at app startup is unsafe and untraceable. | Add reviewed migrations per intentional schema change. |
+| Alembic migrations | At the Phase 3 checkpoint, revision `0001_meetings_transcripts` created the then-current domain schema and reversed it in dependency order. The current head is `0004_meeting_domain_results`. | Creating tables at app startup is unsafe and untraceable. | Add reviewed migrations per intentional schema change. |
 | AsyncSession / async SQLAlchemy | Repositories use `select`, `await session.execute`, `scalar_one_or_none`, `add`, and `flush`. | Synchronous sessions block an async request path. | Keep relationships explicitly loaded when future code needs them. |
 | Repository pattern | Repositories isolate data access and return ORM entities. | Services issuing SQL directly mix application decisions with persistence. | Add query methods only when concrete use cases demand them. |
 | Service/use-case pattern | `MeetingService` validates IDs, maps types, enforces create/replace semantics, and commits writes. | Route handlers could do this, but then HTTP concerns leak into business coordination. | Add route dependencies that construct the service. |
@@ -148,15 +148,19 @@ business/use-case decision owned by the service.
 
 ## Phase 3.4 — Internal Meeting API study section
 
+> Historical checkpoint: this section describes the Phase 3.4 implementation
+> boundary. Phase 4 authentication, Gateway forwarding, and ownership are
+> covered in the Phase 4 section below.
+
 ### What was added and why it is internal
 
 Phase 3.4 mounts two meeting-service endpoints: `POST /meetings` and
 `GET /meetings/{meeting_id}`. They are internal service endpoints, not the
-future public `/api/v1/meetings` gateway contract. Authentication, JWT identity,
-gateway forwarding, and `MeetingServiceClient` are not implemented, so exposing
-a final public boundary now would be premature. The internal route slice proves
-the existing service architecture end-to-end without pretending ownership UUIDs
-supplied in `MeetingCreate` are an authorization model.
+public `/api/v1/meetings` Gateway contract. At this historical checkpoint,
+authentication, JWT identity, Gateway forwarding, and `MeetingServiceClient`
+were not implemented. Phase 4 later added that public boundary and enforces
+ownership using the authenticated identity; the original internal route alone
+did not treat request ownership UUIDs as authorization.
 
 ### Reconstructing the router
 
@@ -290,8 +294,9 @@ exposing an ORM entity.”
 
 `Meeting`: `id`, `organization_id`, `created_by`, `title`, `description`,
 `scheduled_at`, `participants`, `status`, `created_at`, `updated_at`.
-Ownership UUIDs are **not foreign keys** because corresponding models do not
-yet exist. `Transcript`: `id`, `meeting_id`, `segments`, `language`,
+Ownership UUIDs are **not foreign keys**. A `User` model now exists, but the
+initial meeting migration did not create a foreign key for `created_by`; no
+organization model exists for `organization_id`. `Transcript`: `id`, `meeting_id`, `segments`, `language`,
 `created_at`, `updated_at`. `meeting_id` is unique and references `meetings.id`
 with `ON DELETE CASCADE`.
 
@@ -308,7 +313,7 @@ For every answer below, say what is implemented now and what remains planned.
 
 | Question | Expected answer | Likely follow-up / what it tests |
 |---|---|---|
-| What does the project do? | It is a meeting-intelligence platform. Current work persists meetings/transcripts; summarization and public routes are not implemented yet. | Scope honesty; system understanding. |
+| What does the project do? | It is a meeting-intelligence platform. Phase 4 now includes authentication, self-service, Gateway-to-Meeting identity, and meeting ownership; summarization remains planned. | Scope honesty; system understanding. |
 | Why PostgreSQL? | We need transactions, constraints, relationships, JSONB, and deliberate migrations for business data. | Relational-data trade-offs. |
 | What is an ORM / SQLAlchemy? | An ORM maps Python classes to tables; SQLAlchemy supplies the mapping and async database API. | Abstraction versus SQL knowledge. |
 | What is Alembic / a migration? | Alembic records ordered schema changes. A migration makes the same schema reproducible across databases. | Safe schema evolution. |
@@ -337,7 +342,7 @@ For every answer below, say what is implemented now and what remains planned.
 | Where is rollback? | `get_db_session()` rolls back when an exception propagates; services do not duplicate that responsibility. | Failure handling. |
 | Why separate DTOs and ORM? | API contracts should not be persistence objects; explicit mapping protects the boundary. | `from_attributes` trade-offs. |
 | Why two status enums? | Separate layer ownership; explicit `.value` conversion keeps them safely aligned today. | Future consolidation. |
-| Why aren't owner IDs foreign keys? | User/organization tables are not modeled; we retain typed ownership UUIDs without claiming nonexistent relations. | Incremental schema design. |
+| Why aren't owner IDs foreign keys? | `created_by` is checked against the authenticated user but the initial meeting schema has no FK; organization membership/schema is not implemented. | Incremental schema design. |
 | Why no ON CONFLICT? | Create and replace have intentionally distinct domain behavior. | Semantics before convenience. |
 
 ### Level 4 — Failure and debugging
@@ -380,3 +385,106 @@ For every answer below, say what is implemented now and what remains planned.
 - [ ] Name the deferred language-nullability, duplicate-enum, owner-FK, routes, and status-rule decisions.
 - [ ] Tell the six real engineering stories in `problems-and-solutions.md`.
 - [ ] Describe a future improvement without claiming it is already implemented.
+
+---
+
+## Phase 4 — Security and authentication study section
+
+### Trust and token model
+
+| Topic | Project explanation | Interview follow-up |
+|---|---|---|
+| Authentication vs authorization | Authentication establishes the user UUID from a validated access JWT; authorization checks whether that identity owns the requested meeting. | Can a valid user access every record? No. |
+| Access JWT vs refresh token | Access JWT is signed, short-lived, and carries `sub`, `type=access`, `iat`, `exp`. The opaque refresh token identifies a persisted, revocable session. | Why not use one long-lived JWT? It would be harder to revoke or rotate. |
+| Refresh token hashing | Tokens are generated with `secrets`, then only SHA-256(token) is stored. High entropy makes offline guessing impractical; the stored digest itself is not accepted as the token. | Why not use the password hash function? A random token does not need a deliberately slow password hash. |
+| Rotation and replay | A successful refresh revokes the old session and creates a replacement in one transaction. Reusing the old token fails once its revoked state is committed. | What is not yet proven? The PostgreSQL replay/concurrency test has not run against the current schema. |
+| `SELECT FOR UPDATE` | PostgreSQL locks the session row while the service validates and rotates it, serializing attempts using the same token. | Why is a mock insufficient? It cannot prove database lock behavior or isolation semantics. |
+| Password hashing vs encryption | Passwords are one-way hashed with Passlib `pbkdf2_sha256`; they are never stored as reversible ciphertext or plaintext. | Why not encrypt passwords? Authentication needs verification, not recovery of the original value. |
+| HS256 vs RS256 | Gateway access JWTs use configured HS256. Gateway-to-Meeting identity uses RS256 so Gateway holds the private signing key while Meeting holds only the public verification key. | Why separate the keys? Meeting must verify identity without gaining the ability to mint it. |
+| Internal principal | Gateway resolves the external user first, then signs `sub`, `type`, `iss`, `aud`, `iat`, and `exp`. Meeting verifies signature and required claims. | Why not trust `X-User-ID`? A client can forge an ordinary header. |
+| Ownership | Meeting stores the authenticated subject as `created_by` and verifies it on individual meeting and transcript operations. Owner succeeds; non-owner is forbidden. | Can request payload choose the owner? No; ownership comes from the verified principal. |
+| Service/repository transactions | Repositories query/add/update/flush; application services coordinate writes and commit the use case. `get_db_session()` rolls back escaping exceptions. | Why not commit in each repository? A multi-repository use case needs one transaction boundary. |
+
+### Security test strategy and evidence
+
+Normal focused security coverage reported **50 tests run: 44 passed, 6 skipped**.
+The full backend suite reported **209 run: 202 passed, 7 skipped**. The skipped
+tests are opt-in PostgreSQL integration tests guarded by
+`RUN_POSTGRES_INTEGRATION=1`.
+
+| Category | Normal test evidence | PostgreSQL evidence |
+|---|---|---|
+| Password hashing | Hashing, valid/invalid password, malformed hash, generic unknown-user failure | Not needed for ordinary password unit behavior |
+| Access JWT | Valid, expired, malformed, bad signature, wrong type, invalid subject, missing credentials | Not required for token-claim unit cases |
+| Refresh validation and rotation | Service tests cover storage hash, generated token properties, successful rotation, revoked/expired/unknown/missing-user rejection | Added login persistence and old-token replay tests; skipped pending schema |
+| Logout | Service tests cover valid revocation and generic unknown/repeated behavior | Added real session revocation test; skipped |
+| Multi-session | No executed database-backed evidence | Added independent-session test; skipped |
+| Concurrency | Implementation uses PostgreSQL `FOR UPDATE`; not integration-proven | Concurrent same-token test added; skipped |
+| Rollback | Session dependency rollback is mock-tested | Rotation rollback test added; skipped |
+| Current user | Route/dependency tests cover authentication, safe profile, identity and sensitive-field restrictions | No database integration claim |
+| Meeting ownership | Service/route tests cover owner and non-owner meeting/transcript actions | No ownership integration claim |
+| Internal principal | Tests cover signature, expiry, type, issuer, audience, subject, signer separation, and external JWT rejection | Unit/crypto tests |
+
+The configured PostgreSQL instance was reachable, but its Alembic revision was
+`0001_meetings_transcripts` and it lacked the Phase 4 `users` and
+`refresh_sessions` tables. Migrations were not run. Thus lifecycle persistence,
+second use of a rotated token, multi-session independence, concurrency, and
+rotation rollback still need execution against the current schema.
+
+### Interview practice
+
+- How does a password hash differ from a refresh-token hash? Passwords are low-entropy human secrets and use PBKDF2; refresh tokens are high-entropy random values and use fast SHA-256 for indexed lookup.
+- Why use an internal principal instead of forwarding the external JWT? It gives Meeting a short-lived, audience-specific assertion and keeps external JWT trust and the private key at Gateway.
+- What does row locking guarantee? Under PostgreSQL, requests rotating the same session serialize around that row. The implementation is present, but the opt-in concurrent integration test still needs to run against the current schema.
+- What is an authentication test matrix? It checks success and failure boundaries—malformed, expired, wrongly signed, wrong-type, unauthorized, cross-user, and replay cases—rather than only happy paths.
+- What is the current membership limitation? Individual meeting operations enforce `created_by`; organization-wide internal listing still lacks membership authorization and is not exposed as a Gateway list route.
+
+## Phase 5 — Meeting domain and persistence study section
+
+### Architecture and persistence concepts
+
+| Topic | Project implementation | Interview follow-up |
+|------|-------------------------|---------------------|
+| ORM model vs Pydantic schema | ORM classes define PostgreSQL columns, constraints, and relationships; Pydantic schemas validate request data and serialize DTOs. Services map explicitly between them. | Why not return ORM entities from FastAPI? Keep persistence state separate from the client contract. |
+| Repository vs service | Repositories use `AsyncSession.execute(select(...))`, add rows, flush, and return ORM objects. Services enforce ownership, coordinate use cases, map DTOs, and commit. | Where does a duplicate-version conflict become a domain error? In SummaryService. |
+| `flush()` vs `commit()` | `flush()` sends pending SQL and surfaces generated values/constraints inside the transaction. `commit()` finalizes the successful service use case. | Why not commit in each repository? A service may coordinate multiple writes in one transaction. |
+| Async query and loading | Repositories use async `execute()` and explicit scalar lookups/lists. Services map scalar columns and do not traverse relationships to build DTOs, avoiding implicit lazy I/O and relationship N+1 queries. | How do you avoid an async lazy-load during response serialization? Build DTOs from explicitly loaded scalar data. |
+| Ordering and pagination | Lists order deterministically: summaries by version then ID; tasks/follow-ups by `created_at DESC, id DESC`; decisions by `created_at ASC, id ASC`. API lists use shared pagination schemas. | Why include a unique tie-breaker? Stable pages when timestamps match. |
+| Relationships and delete behavior | Meeting has one optional Transcript and many Summary/Task/Decision/FollowUp rows. Meeting child FKs cascade. Task has an optional User assignee; deleting the User sets `assignee_id` to `NULL`. | Why preserve a Task when its assignee disappears? The action item remains useful without an assignee. |
+| Summary versions | Database requires positive version and unique `(meeting_id, version)`. Latest lookup selects the highest version. Service accepts explicit versions; the current HTTP create route only sends the default version 1. | Is version auto-incremented? No. |
+| Partial updates | `TaskUpdate` and `FollowupUpdate` apply only supplied fields; meeting association is immutable. | How does `exclude_unset=True` differ from writing default values? It preserves fields omitted by the caller. |
+| Ownership | Gateway signs a short-lived internal principal; result services resolve the result's Meeting and check its owner. Nested routes also check parent/result consistency. | Can a client supply `created_by`? No; ownership comes from authenticated identity. |
+
+### Migration and PostgreSQL evidence
+
+The linear migration chain is `0001_meetings_transcripts → 0002_users →
+0003_refresh_sessions → 0004_meeting_domain_results`. The verified local
+development database moved from `0001` to `0004`; `alembic check` reported no
+pending operations. PostgreSQL tests verified result persistence, Summary
+uniqueness/latest ordering, Task/FollowUp status filtering, `ON DELETE SET
+NULL`, and Meeting-child cascades.
+
+The PostgreSQL test found that SQLAlchemy/asyncpg wraps the uniqueness error so
+the constraint name was not available where SummaryService first looked.
+The service now checks wrapped exception causes/diagnostics and maps the named
+Summary constraint to `ConflictError`. This is why a mocked unit test alone was
+not sufficient: the real driver exception shape mattered.
+
+### Phase 5 test evidence
+
+- Focused Phase 5/API and Meeting/Transcript route tests: **86 passed**.
+- Security regression suite: **140 passed**.
+- Opt-in PostgreSQL integration tests: **7 passed**.
+- Full backend suite with `RUN_POSTGRES_INTEGRATION=1`: **259 passed**.
+
+### Phase 5 design boundaries
+
+- Public organization-wide Meeting listing remains deferred: no persisted
+  Organization/membership model or membership authorization policy exists.
+  A client-supplied `organization_id` alone is not authorization.
+- No Meeting search fields or client-selected sort keys are defined; the
+  internal list retains deterministic `created_at DESC, id DESC` ordering.
+- MeetingInsight remains deferred because row shape, cardinality, and
+  lifecycle/version semantics are not decided.
+- Phase 6 has not started. No AI generation, workers, embeddings, vector
+  search, or frontend implementation is part of Phase 5.

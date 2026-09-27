@@ -55,7 +55,7 @@ class MeetingService:
         meeting_id: str,
         authenticated_user_id: UUID,
     ) -> MeetingPublic:
-        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
+        meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
         return self._meeting_to_public(meeting)
 
     async def list_meetings(
@@ -86,7 +86,7 @@ class MeetingService:
         status: SchemaMeetingStatus,
         authenticated_user_id: UUID,
     ) -> MeetingPublic:
-        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
+        meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
 
         updated = await self._meeting_repository.update_status(
             meeting,
@@ -101,7 +101,7 @@ class MeetingService:
         payload: MeetingUpdate,
         authenticated_user_id: UUID,
     ) -> MeetingPublic:
-        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
+        meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
 
         for field_name, value in payload.model_dump(exclude_unset=True).items():
             setattr(meeting, field_name, value)
@@ -116,7 +116,7 @@ class MeetingService:
         authenticated_user_id: UUID,
     ) -> TranscriptInDB:
         meeting_id = self._parse_uuid(payload.meeting_id, "meeting ID")
-        await self._get_owned_meeting(str(meeting_id), authenticated_user_id)
+        await self.require_owned_meeting(str(meeting_id), authenticated_user_id)
 
         existing = await self._transcript_repository.get_by_meeting_id(meeting_id)
         if existing is not None:
@@ -136,7 +136,7 @@ class MeetingService:
         meeting_id: str,
         authenticated_user_id: UUID,
     ) -> TranscriptInDB:
-        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
+        meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
         transcript = await self._transcript_repository.get_by_meeting_id(meeting.id)
         if transcript is None:
             raise NotFoundError("Transcript not found.")
@@ -150,7 +150,7 @@ class MeetingService:
         language: str | None,
         authenticated_user_id: UUID,
     ) -> TranscriptInDB:
-        meeting = await self._get_owned_meeting(meeting_id, authenticated_user_id)
+        meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
         transcript = await self._transcript_repository.get_by_meeting_id(meeting.id)
         if transcript is None:
             raise NotFoundError("Transcript not found.")
@@ -170,11 +170,12 @@ class MeetingService:
         except ValueError as error:
             raise AppValidationError(f"Invalid {field_name}.") from error
 
-    async def _get_owned_meeting(
+    async def require_owned_meeting(
         self,
         meeting_id: str,
         authenticated_user_id: UUID,
     ) -> Meeting:
+        """Return a meeting only after applying the canonical ownership check."""
         meeting = await self._meeting_repository.get_by_id(
             self._parse_uuid(meeting_id, "meeting ID")
         )

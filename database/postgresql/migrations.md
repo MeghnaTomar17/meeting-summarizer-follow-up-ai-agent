@@ -43,12 +43,41 @@ alembic -c alembic.ini revision --autogenerate -m "describe change"
 - Forward-only migrations in CI; rollbacks documented in runbooks
 - One canonical migration system for the entire platform
 
-## Current revision
+## Migration head and local database state
 
-`0001_meetings_transcripts` is the applied initial domain-schema revision. It
-creates the `meeting_status` PostgreSQL enum, the `meetings` and `transcripts`
-tables, their lookup indexes, and the cascading transcript-to-meeting foreign
-key. Its migration file is `backend/migrations/versions/0001_create_meetings_and_transcripts.py`.
+The code migration head is `0004_meeting_domain_results`:
+
+```text
+0001_meetings_transcripts
+  → 0002_users
+    → 0003_refresh_sessions
+      → 0004_meeting_domain_results
+```
+
+`0001_meetings_transcripts` creates the `meeting_status` enum, meeting and
+transcript tables, indexes, and cascading transcript-to-meeting foreign key.
+`0002_users` adds user identities and password hashes. `0003_refresh_sessions`
+adds per-login refresh sessions with hashed tokens, user foreign key, expiry,
+revocation, and lookup/cleanup indexes. Each revision has a reversible
+downgrade.
+
+At the Phase 4 security-testing checkpoint, the configured local database
+reported `0001_meetings_transcripts`; that was a historical observation. At the
+Phase 5 integration checkpoint, after verifying the local development target,
+`alembic upgrade head` applied the pending migrations. The database now reports
+`0004_meeting_domain_results (head)`, and `alembic check` found no pending
+upgrade operations.
+
+`0004_meeting_domain_results` creates versioned summaries, tasks, decisions,
+and follow-ups with their indexes, foreign keys, and native status enums. Its
+downgrade drops dependent tables/indexes before removing the enums. Meeting
+insight persistence is deferred because the current product/domain contracts do
+not define its row granularity, fields, or versioning behavior.
+
+Phase 5 opt-in PostgreSQL integration tests passed (7 total across refresh
+session and Meeting-domain persistence coverage). They confirmed Summary
+version uniqueness/latest ordering, Task and FollowUp status queries, assignee
+`ON DELETE SET NULL`, and Meeting-child `ON DELETE CASCADE` against PostgreSQL.
 
 ### Initial migration history
 

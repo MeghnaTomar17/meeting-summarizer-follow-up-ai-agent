@@ -203,6 +203,73 @@ class AuthenticationServiceTestCase(unittest.TestCase):
         self.repository.get_by_id.assert_not_called()
         self.session.commit.assert_not_called()
 
+    def test_refresh_rejects_revoked_unknown_and_missing_user_generically(self) -> None:
+        from shared.database.models.refresh_session import RefreshSession
+
+        revoked = RefreshSession(
+            user_id=uuid.uuid4(), token_hash="1" * 64,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            revoked_at=datetime.now(timezone.utc),
+        )
+        for stored in (None, revoked):
+            self.refresh_repository.get_by_hash_for_update.return_value = stored
+            with self.subTest(stored=stored), self.assertRaises(self.UnauthorizedError) as error:
+                asyncio.run(self.service.refresh(self.module.RefreshRequest(refresh_token="invalid")))
+            self.assertEqual(error.exception.message, "Invalid refresh token.")
+
+        valid = RefreshSession(
+            user_id=uuid.uuid4(), token_hash="2" * 64,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        self.refresh_repository.get_by_hash_for_update.return_value = valid
+        self.repository.get_by_id = AsyncMock(return_value=None)
+        with self.assertRaises(self.UnauthorizedError) as error:
+            asyncio.run(self.service.refresh(self.module.RefreshRequest(refresh_token="missing-user")))
+        self.assertEqual(error.exception.message, "Invalid refresh token.")
+        self.session.commit.assert_not_called()
+
+    def test_valid_logout_revokes_only_the_supplied_session(self) -> None:
+        from shared.database.models.refresh_session import RefreshSession
+
+        session_a = RefreshSession(
+            user_id=uuid.uuid4(), token_hash="a" * 64,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        self.refresh_repository.get_by_hash_for_update.return_value = session_a
+        result = asyncio.run(self.service.logout(self.module.RefreshRequest(refresh_token="token-a")))
+        self.assertTrue(result.success)
+        self.assertIsNotNone(session_a.revoked_at)
+        self.refresh_repository.update.assert_awaited_once_with(session_a)
+        self.session.commit.assert_awaited_once()
+
+    def test_generated_refresh_tokens_are_distinct_and_opaque(self) -> None:
+        user = self._user()
+        first, first_session = self.service._issue_token_pair(user)
+        second, second_session = self.service._issue_token_pair(user)
+        self.assertNotEqual(first.refresh_token, second.refresh_token)
+        self.assertEqual(len(first.refresh_token), 64)
+        self.assertNotEqual(first.refresh_token, first_session.token_hash)
+        self.assertNotIn(str(user.id), first.refresh_token)
+        self.assertNotIn(user.email, first.refresh_token)
+        self.assertNotEqual(first.refresh_token, first.access_token)
+
+    def test_signed_access_jwt_is_not_accepted_as_refresh_token(self) -> None:
+        user = self._user()
+        jwt_module = importlib.import_module("app.auth.jwt")
+        access_token = jwt_module.create_access_token(
+            str(user.id),
+            secret=self.settings.jwt_secret.get_secret_value(),
+            algorithm=self.settings.jwt_algorithm,
+            expires_minutes=self.settings.jwt_expire_minutes,
+        )
+        self.refresh_repository.get_by_hash_for_update.return_value = None
+        with self.assertRaises(self.UnauthorizedError) as error:
+            asyncio.run(
+                self.service.refresh(self.module.RefreshRequest(refresh_token=access_token))
+            )
+        self.assertEqual(error.exception.message, "Invalid refresh token.")
+        self.session.commit.assert_not_called()
+
     def test_logout_is_idempotent_and_commits(self) -> None:
         self.refresh_repository.get_by_hash_for_update.return_value = None
         result = asyncio.run(self.service.logout(self.module.RefreshRequest(refresh_token="unknown")))

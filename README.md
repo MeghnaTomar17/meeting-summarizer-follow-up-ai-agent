@@ -4,7 +4,7 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 
 ## Status
 
-**Current checkpoint: Phase 3.4 complete** — the meeting domain has PostgreSQL ORM models, an applied initial Alembic migration, async repositories, a service/use-case layer, and internal create/get meeting routes. Gateway/public APIs, authentication, AI processing, search, workers, and frontend integration remain planned.
+**Current checkpoint: Phase 5 complete** — the Meeting domain includes persisted meetings, transcripts, summaries, tasks, decisions, and follow-up drafts, exposed through authenticated Meeting Service APIs and public Gateway v1 proxies. PostgreSQL is at migration head `0004_meeting_domain_results`; integration, security, and full backend validation passed. MeetingInsight and public organization-wide Meeting listing remain deferred; Phase 6 AI processing has not started.
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -119,7 +119,7 @@ Each service exposes:
 
 ## Development
 
-See [`docs/architecture/project-foundation.md`](docs/architecture/project-foundation.md) for the current implementation boundary, [`docs/engineering/problems-and-solutions.md`](docs/engineering/problems-and-solutions.md) for the engineering history, and [`docs/study/phase-3-study-guide.md`](docs/study/phase-3-study-guide.md) for a Phase 3 walkthrough.
+See [`docs/architecture/project-foundation.md`](docs/architecture/project-foundation.md) for the current implementation boundary, [`docs/engineering/problems-and-solutions.md`](docs/engineering/problems-and-solutions.md) for the engineering history, and [`docs/study/phase-3-study-guide.md`](docs/study/phase-3-study-guide.md) for Phase 3–5 study notes.
 
 ## License
 

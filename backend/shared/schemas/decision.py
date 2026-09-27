@@ -8,7 +8,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class DecisionCreate(BaseModel):
+    """Client fields for creating a decision under a meeting URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str
+    context: str | None = None
+    participants: list[str] = Field(default_factory=list)
 
 
 class DecisionBase(BaseModel):

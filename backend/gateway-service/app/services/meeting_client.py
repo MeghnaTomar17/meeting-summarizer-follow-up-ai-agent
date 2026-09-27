@@ -21,6 +21,11 @@ from shared.schemas.meeting import (
     MeetingUpdate,
 )
 from shared.schemas.transcript import TranscriptInDB, TranscriptWrite
+from shared.schemas.summary import SummaryBase, SummaryInDB
+from shared.schemas.task import TaskBase, TaskInDB, TaskUpdate
+from shared.schemas.decision import DecisionBase, DecisionInDB
+from shared.schemas.followup import FollowupBase, FollowupInDB, FollowupUpdate
+from shared.schemas.pagination import PaginatedResponse
 from shared.security.internal_principal import create_internal_principal
 
 
@@ -127,6 +132,53 @@ class MeetingServiceClient:
         )
         return TranscriptInDB.model_validate(response)
 
+    async def create_summary(self, meeting_id: str, payload: SummaryBase, *, user_id: UUID, request_id: str | None) -> SummaryInDB:
+        return SummaryInDB.model_validate(await self._request("POST", f"/meetings/{meeting_id}/summaries", payload.model_dump(exclude={"meeting_id"}, mode="json"), user_id, request_id))
+
+    async def list_summaries(self, meeting_id: str, *, page: int = 1, page_size: int = 20, user_id: UUID, request_id: str | None) -> PaginatedResponse[SummaryInDB]:
+        result = await self._request("GET", f"/meetings/{meeting_id}/summaries?page={page}&page_size={page_size}", None, user_id, request_id)
+        return PaginatedResponse[SummaryInDB].model_validate(result)
+
+    async def get_summary(self, meeting_id: str, summary_id: str, *, latest: bool = False, user_id: UUID, request_id: str | None) -> SummaryInDB:
+        path = f"/meetings/{meeting_id}/summaries/" + ("latest" if latest else summary_id)
+        return SummaryInDB.model_validate(await self._request("GET", path, None, user_id, request_id))
+
+    async def create_task(self, meeting_id: str, payload: TaskBase, *, user_id: UUID, request_id: str | None) -> TaskInDB:
+        return TaskInDB.model_validate(await self._request("POST", f"/meetings/{meeting_id}/tasks", payload.model_dump(exclude={"meeting_id"}, mode="json"), user_id, request_id))
+
+    async def list_tasks(self, meeting_id: str, *, task_status: str | None = None, page: int = 1, page_size: int = 20, user_id: UUID, request_id: str | None) -> PaginatedResponse[TaskInDB]:
+        path = f"/meetings/{meeting_id}/tasks?page={page}&page_size={page_size}" + (f"&status={task_status}" if task_status else "")
+        return PaginatedResponse[TaskInDB].model_validate(await self._request("GET", path, None, user_id, request_id))
+
+    async def get_task(self, meeting_id: str, task_id: str, *, user_id: UUID, request_id: str | None) -> TaskInDB:
+        return TaskInDB.model_validate(await self._request("GET", f"/meetings/{meeting_id}/tasks/{task_id}", None, user_id, request_id))
+
+    async def update_task(self, meeting_id: str, task_id: str, payload: TaskUpdate, *, user_id: UUID, request_id: str | None) -> TaskInDB:
+        return TaskInDB.model_validate(await self._request("PATCH", f"/meetings/{meeting_id}/tasks/{task_id}", payload.model_dump(exclude_unset=True, mode="json"), user_id, request_id))
+
+    async def create_decision(self, meeting_id: str, payload: DecisionBase, *, user_id: UUID, request_id: str | None) -> DecisionInDB:
+        return DecisionInDB.model_validate(await self._request("POST", f"/meetings/{meeting_id}/decisions", payload.model_dump(exclude={"meeting_id"}, mode="json"), user_id, request_id))
+
+    async def list_decisions(self, meeting_id: str, *, page: int = 1, page_size: int = 20, user_id: UUID, request_id: str | None) -> PaginatedResponse[DecisionInDB]:
+        path = f"/meetings/{meeting_id}/decisions?page={page}&page_size={page_size}"
+        return PaginatedResponse[DecisionInDB].model_validate(await self._request("GET", path, None, user_id, request_id))
+
+    async def get_decision(self, meeting_id: str, decision_id: str, *, user_id: UUID, request_id: str | None) -> DecisionInDB:
+        return DecisionInDB.model_validate(await self._request("GET", f"/meetings/{meeting_id}/decisions/{decision_id}", None, user_id, request_id))
+
+    async def create_followup(self, meeting_id: str, payload: FollowupBase, *, user_id: UUID, request_id: str | None) -> FollowupInDB:
+        return FollowupInDB.model_validate(await self._request("POST", f"/meetings/{meeting_id}/followups", payload.model_dump(exclude={"meeting_id"}, mode="json"), user_id, request_id))
+
+    async def list_followups(self, meeting_id: str, *, followup_status: str | None = None, page: int = 1, page_size: int = 20, user_id: UUID, request_id: str | None) -> PaginatedResponse[FollowupInDB]:
+        path = f"/meetings/{meeting_id}/followups?page={page}&page_size={page_size}" + (f"&status={followup_status}" if followup_status else "")
+        return PaginatedResponse[FollowupInDB].model_validate(await self._request("GET", path, None, user_id, request_id))
+
+    async def get_followup(self, meeting_id: str, followup_id: str, *, user_id: UUID, request_id: str | None) -> FollowupInDB:
+        return FollowupInDB.model_validate(await self._request("GET", f"/meetings/{meeting_id}/followups/{followup_id}", None, user_id, request_id))
+
+    async def update_followup(self, meeting_id: str, followup_id: str, payload: FollowupUpdate, *, user_id: UUID, request_id: str | None) -> FollowupInDB:
+        return FollowupInDB.model_validate(await self._request("PATCH", f"/meetings/{meeting_id}/followups/{followup_id}", payload.model_dump(exclude_unset=True, mode="json"), user_id, request_id))
+
     async def _request(
         self,
         method: str,
@@ -134,7 +186,7 @@ class MeetingServiceClient:
         payload: dict[str, object] | None,
         user_id: UUID,
         request_id: str | None,
-    ) -> dict[str, object]:
+    ) -> object:
         principal = create_internal_principal(
             user_id,
             private_key=self._settings.internal_principal_private_key.get_secret_value(),
@@ -153,7 +205,7 @@ class MeetingServiceClient:
             raise ServiceUnavailableError("Meeting service is unavailable.") from error
         self._raise_for_error(response)
         body = response.json()
-        if not isinstance(body, dict):
+        if not isinstance(body, (dict, list)):
             raise ServiceUnavailableError("Meeting service returned an invalid response.")
         return body
 

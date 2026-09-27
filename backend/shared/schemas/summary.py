@@ -8,7 +8,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class SummaryCreate(BaseModel):
+    """Client fields for creating a summary under a meeting URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+    key_topics: list[str] = Field(default_factory=list)
+    model_provider: str | None = None
+    model_name: str | None = None
 
 
 class SummaryBase(BaseModel):

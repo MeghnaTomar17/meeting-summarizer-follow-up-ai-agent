@@ -15,6 +15,10 @@ from app.config.settings import get_settings
 from app.database import shutdown_database, startup_database
 from app.routes.meetings import router as meetings_router
 from app.routes.transcripts import router as transcripts_router
+from app.routes.summaries import router as summaries_router
+from app.routes.tasks import router as tasks_router
+from app.routes.decisions import router as decisions_router
+from app.routes.followups import router as followups_router
 from shared.database.health import check_postgres_connectivity
 from shared.middleware.request_logging import REQUEST_ID_HEADER
 from shared.schemas.errors import ErrorBody, ErrorResponse
@@ -51,6 +55,10 @@ register_exception_handlers(app)
 
 app.include_router(meetings_router)
 app.include_router(transcripts_router)
+app.include_router(summaries_router)
+app.include_router(tasks_router)
+app.include_router(decisions_router)
+app.include_router(followups_router)
 
 # TODO: include_router upload
 # TODO: lifespan — object storage

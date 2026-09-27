@@ -1,6 +1,6 @@
 # Database Architecture
 
-> MannerAI Meetings Platform — PostgreSQL persistence and initial domain schema.
+> MannerAI Meetings Platform — PostgreSQL persistence and current domain schema through Phase 5.
 
 ## Stack
 
@@ -27,7 +27,10 @@ PostgreSQL
 | Alembic migrations | `backend/migrations/` |
 | Pydantic API schemas | `backend/shared/schemas/` (separate layer) |
 
-**Phase 2.5:** only `meeting-service` initializes PostgreSQL. Other services do not connect yet.
+**Current ownership:** gateway-service initializes PostgreSQL for users and
+refresh sessions; meeting-service initializes it for meetings, transcripts,
+summaries, tasks, decisions, and follow-ups. Both use the shared async
+engine/session infrastructure and canonical Alembic schema.
 
 ## Engine vs session
 
@@ -46,14 +49,105 @@ Route → Service → Repository → AsyncSession → commit/rollback
 ```
 
 - `get_db_session()` yields a session but does **not** auto-commit.
-- Repositories execute queries; the service layer owns transaction boundaries.
+- Repositories execute queries; application services own transaction boundaries.
 - On exception, the session dependency rolls back before re-raising.
 
-`flush` and `commit` are intentionally separate. A repository flushes pending
-SQL so generated values and constraint errors are available inside the current
-transaction. `MeetingService` commits only after its full successful use case;
-reads never commit. Repositories do not rollback, because the dependency owns
-that exception path.
+`flush` and `commit` are intentionally separate. Repositories flush pending SQL
+so generated values and constraint errors are available inside the current
+transaction. Authentication, user, meeting, and meeting-result services commit successful
+writes only after their use case; repositories do not commit or rollback. The
+request-scoped dependency rolls back when an exception escapes.
+
+## Phase 4 identity and refresh-session schema
+
+The migration chain is `0001_meetings_transcripts` → `0002_users` →
+`0003_refresh_sessions`. The `users` table stores canonical email and
+`password_hash`; plaintext passwords are not persisted. `refresh_sessions`
+stores a UUID, `user_id` foreign key with `ON DELETE CASCADE`, unique
+`token_hash`, timezone-aware `expires_at`, and nullable `revoked_at`. Indexes
+support user lookup and expiration cleanup. The refresh token itself is never
+stored.
+
+Gateway uses `UserRepository` and `RefreshSessionRepository`; both perform
+persistence operations only. `AuthenticationService` coordinates login,
+rotation, logout, validation, and commits. Refresh looks up the hash with
+`SELECT ... FOR UPDATE`, validates the locked session and user, revokes the old
+row, inserts the replacement, and commits as one transaction. This serializes
+same-token refreshes under PostgreSQL's normal transaction isolation; the
+opt-in integration test is the intended real-database verification.
+
+At the Phase 4 security-testing checkpoint, the configured PostgreSQL reported
+revision `0001_meetings_transcripts`, without `users` or `refresh_sessions`.
+The migration and test status at that historical checkpoint is superseded by
+the Phase 5 synchronization record below.
+
+## Phase 5 persistent Meeting domain
+
+Revision `0004_meeting_domain_results` follows `0003_refresh_sessions` and
+defines Summary, Task, Decision, and FollowUp persistence. Each belongs to one
+Meeting; Meeting has zero or many of each result and database foreign keys
+cascade child deletion. `Meeting.transcript` is one-to-one (unique transcript
+`meeting_id`). `Meeting.summaries`, `.tasks`, `.decisions`, and `.followups` are
+one-to-many relationships. A Task may have zero or one User assignee, while a
+User may be assigned many Tasks. The `assignee_id → users.id` foreign key uses
+`ON DELETE SET NULL`; deleting an assignee preserves the Task.
+
+Summary `version` is positive and defaults to 1. The database enforces unique
+`(meeting_id, version)` using `uq_summaries_meeting_version`; the repository's
+latest-version query selects the greatest version. The Summary API route
+currently creates version 1 only (the create request has no version field);
+service-level creation accepts an explicit version. Version progression is
+not automatic.
+
+Summary and Decision retain the `created_at` fields in their current shared
+schemas; Task also has `updated_at` for its workflow state; Followup retains
+the contract's `created_at`, schedule, and send timestamps. Statuses use native
+PostgreSQL enums whose values match the Pydantic contracts. JSONB holds the
+existing list-shaped `key_topics`, `participants`, and `recipients` values.
+
+The roadmap's MeetingInsight concept is not yet a defined row-level contract:
+its current prompt describes broad analytical categories but does not specify
+whether persistence is per analysis run, per category, or per finding, nor a
+version/replacement policy. Its schema is deliberately deferred until those
+semantics are decided.
+
+### Result indexes and query behavior
+
+- `uq_summaries_meeting_version`: unique per-meeting version constraint.
+- `ix_summaries_meeting_version_desc`: meeting/version descending lookup.
+- `ix_tasks_meeting_status`, `ix_tasks_assignee_status`: Task filtering.
+- `ix_decisions_meeting_id`, `ix_followups_meeting_id`: meeting-scoped lists.
+- Meeting foreign keys cascade deletes; the Task assignee foreign key sets the
+  reference to `NULL` when a User is deleted.
+- `0004_meeting_domain_results` defines `ck_summaries_version_positive` and
+  native `task_status` / `followup_status` enums matching the Pydantic values.
+  JSONB stores `key_topics`, decision `participants`, and follow-up `recipients`.
+
+### Repository and service boundary
+
+Repositories use `AsyncSession.execute(select(...))` and return ORM rows; they
+flush writes but do not commit or roll back. Meeting-domain services own
+successful-write commits, map rows to Pydantic DTOs, and enforce ownership
+through `MeetingService.require_owned_meeting()`. Result mappers read scalar
+columns rather than traversing ORM relationships, avoiding implicit async lazy
+loads and relationship-driven N+1 queries.
+
+Meeting-scoped repository lists are deterministic: Summary versions ascending
+then ID (latest lookup descending), Tasks and FollowUps by `created_at DESC,
+id DESC`, and Decisions by `created_at ASC, id ASC`. Task and FollowUp
+repositories add status predicates to SQL queries. API lists use the shared
+pagination schemas/helper.
+
+### PostgreSQL Phase 5 synchronization
+
+The verified local development database began at `0001_meetings_transcripts`.
+After target verification, `alembic upgrade head` applied `0002_users`,
+`0003_refresh_sessions`, and `0004_meeting_domain_results`. Final
+`alembic current` reports `0004_meeting_domain_results (head)` and
+`alembic check` reports no pending upgrade operations. Seven opt-in PostgreSQL
+tests passed, covering refresh-session lifecycle plus Phase 5 result
+persistence/retrieval, Summary unique versions/latest ordering, Task/FollowUp
+status filters, assignee `SET NULL`, and Meeting-child `ON DELETE CASCADE`.
 
 ## Implemented Phase 3 domain schema
 
@@ -89,14 +183,13 @@ creation, lookup, organization listing, status updates, transcript creation,
 lookup, and replacement. Phase 3.4 wires its create/get meeting use cases to
 internal meeting-service routes; the service remains independent of FastAPI.
 
-## Internal route composition (Phase 3.4)
+## Meeting route composition (Phase 3.4 baseline, extended in Phase 4)
 
-The mounted meeting-service router exposes internal `POST /meetings` and
-`GET /meetings/{meeting_id}`. It is not the future gateway `/api/v1/meetings`
-API: authentication, gateway forwarding, and `MeetingServiceClient` are not
-implemented. Building the internal route slice first validates the service
-architecture independently rather than presenting an unauthenticated route as a
-final public contract.
+Meeting Service exposes internal unversioned meeting and transcript routes.
+Gateway exposes authenticated public meeting and transcript routes under
+`/api/v1/meetings` and forwards them using `MeetingServiceClient`. The internal
+organization-wide list route remains without identity or membership
+authorization; organization membership is pending.
 
 ```
 HTTP request
@@ -117,21 +210,20 @@ repository method → AsyncSession → PostgreSQL
 ```
 
 `get_meeting_service` constructs the repositories and `MeetingService` once per
-request from the injected session. This avoids duplicating composition in every
-endpoint while keeping routes free of SQL and transaction handling.
+request from the injected session. The Gateway similarly composes its client
+from settings and derives the user identity from the authenticated access JWT.
+This keeps routes free of SQL and business transaction handling.
 `get_db_session()` obtains a session from the shared factory, yields it for the
 request, and rolls it back only if an exception propagates. On success it does
 not auto-commit: `MeetingService` remains the successful-write commit boundary,
 while reads do not commit.
 
-Routes accept validated Pydantic input and delegate: POST calls
-`MeetingService.create_meeting()` and returns `MeetingPublic` with HTTP 201;
-GET passes its string path parameter to `MeetingService.get_meeting()` and
-returns `MeetingPublic` with HTTP 200. Routes do not construct ORM models,
-convert UUIDs, execute SQL, commit, rollback, impose business rules, or catch
-and manually translate `AppError` instances. Existing handlers convert missing
-meetings to a 404 `ErrorResponse`, invalid UUIDs to 422, and unexpected errors
-to a safe 500; request IDs remain included.
+Routes accept validated Pydantic input and delegate. Authenticated Gateway
+operations call the client, which sends a signed internal principal. Meeting
+Service validates that principal, and its service checks `created_by` for
+individual meeting/transcript access. Routes do not construct ORM models,
+execute SQL, commit, rollback, or manually translate `AppError` instances.
+Central handlers keep error responses safe and include request IDs.
 
 Transcript creation requires an existing meeting and rejects an existing
 transcript with `ConflictError`; replacement requires an existing transcript and

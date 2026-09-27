@@ -29,10 +29,10 @@ These must not be conflated.
 
 ### Internal APIs
 
-Internal services use **unversioned** paths. Meeting-service currently exposes
-internal `POST /meetings` and `GET /meetings/{meeting_id}`. The gateway will
-translate public `/api/v1/meetings` to internal `/meetings` when proxying in a
-future phase; gateway forwarding and authentication do not exist yet.
+Internal services use **unversioned** paths. Meeting-service exposes internal
+meeting and transcript routes. The gateway authenticates public requests and
+forwards supported meeting operations to Meeting Service with a signed
+internal-principal bearer assertion.
 
 ### API evolution policy
 
@@ -46,10 +46,11 @@ future phase; gateway forwarding and authentication do not exist yet.
 The gateway:
 
 - Owns the canonical public OpenAPI specification
-- Applies authentication and authorization (future)
+- Authenticates users with access JWTs and applies meeting ownership through the
+  downstream service
 - Validates and shapes public request/response models
-- Proxies or aggregates calls to internal services (future)
-- Forwards `X-Request-ID` to downstream services (future)
+- Proxies supported meeting and transcript operations to Meeting Service
+- Forwards `X-Request-ID` to downstream services
 
 Internal services retain minimal OpenAPI for local development and debugging.
 
@@ -236,9 +237,16 @@ Reusable error response definitions: `shared.api.openapi.COMMON_ERROR_RESPONSES`
 | `*Public` | Client-facing responses |
 | `*Create` / `*Update` | Request bodies |
 
-`UserInDB.hashed_password` must never appear in public responses.
+`UserInDB.password_hash` must never appear in public responses.
 
 `MeetingPublic` excludes internal ownership fields (`organization_id`, `created_by`) present on `MeetingInDB`.
+
+Phase 5 result endpoints currently use the existing Pydantic `SummaryInDB`,
+`TaskInDB`, `DecisionInDB`, and `FollowupInDB` DTOs as response models. These
+schemas contain result fields and the owning `meeting_id`, but no
+authentication secrets or ownership-assigning fields. Phase 5 create request
+schemas omit `meeting_id`; the nested route path supplies it. Do not expose ORM
+entities directly.
 
 ## Router organization
 
@@ -246,7 +254,8 @@ Reusable error response definitions: `shared.api.openapi.COMMON_ERROR_RESPONSES`
 
 Aggregation point: `gateway-service/app/api/v1/router.py`
 
-Future mounts: auth, users, meetings, search, analytics, integrations.
+Mounted: auth, users, meetings, and meeting result routes. Search, analytics,
+and integrations remain unmounted.
 
 ### meeting-service (internal)
 
@@ -256,6 +265,11 @@ Routers in `app/routes/`: meetings, upload (nested under `/meetings`), transcrip
 
 Router in `app/routes/search.py`.
 
-The meeting-service meetings router is mounted with internal create/get routes.
-Its transcript and upload routers remain scaffolded and unmounted. Gateway
-business routers and the search-service router remain scaffolded and unmounted.
+Meeting Service mounts meeting, transcript, summary, task, decision, and
+follow-up routes. Result routes are nested under `/meetings/{meeting_id}` and
+perform ownership checks in services. The organization-wide Meeting list
+remains internal-only: there is no Organization/membership model or
+authorization policy, and a client-supplied organization ID is not sufficient
+authorization. Phase 5 does not define Meeting search fields or client-selected
+sort keys; the internal list retains deterministic `created_at DESC, id DESC`
+ordering. Task and FollowUp lists support the existing `status` equality filter.

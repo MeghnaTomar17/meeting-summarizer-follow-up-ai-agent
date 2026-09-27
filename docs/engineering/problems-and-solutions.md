@@ -1,6 +1,6 @@
 # Engineering Problems and Solutions
 
-This is a factual record of meaningful issues encountered through Phase 3.4.
+This is a factual record of meaningful issues encountered through Phase 5.
 It complements the current architecture documents; it does not turn deferred
 design choices into completed work.
 
@@ -319,3 +319,108 @@ database check.
 I can exercise FastAPI validation, response models, and centralized errors with
 no database, while retaining separate repository/service and integration tests
 for lower layers.”
+
+## PS-012 — Password-hash backend compatibility
+
+### Context and resolution
+
+During authentication work, the bcrypt backend presented a compatibility issue
+in the development environment. The password helper uses Passlib's
+`pbkdf2_sha256` scheme for new hashes. Passwords remain one-way hashed; this did
+not introduce encryption or plaintext storage.
+
+### Engineering lesson / interview talking point
+
+“I choose a password-hashing scheme that works with the actual runtime and
+verify behavior in tests. The implementation stores a password hash, never the
+password, and isolates the scheme behind helper functions.”
+
+## PS-013 — Malformed stored password hashes fail as authentication
+
+### Context and resolution
+
+`verify_password()` catches Passlib `UnknownHashError` and `ValueError` and
+returns `False`. The login service then uses the same generic invalid-email-or-
+password response used for a wrong password or unknown email.
+
+### Engineering lesson / interview talking point
+
+“A corrupt or unsupported stored hash is an authentication failure, not a
+reason to expose a verifier exception as a server error. The public response
+does not reveal which credential check failed.”
+
+## PS-014 — Narrow handling of duplicate-email races
+
+### Context and resolution
+
+Signup and email update handle `IntegrityError` as a conflict only when the
+named `uq_users_email` constraint caused it. Other integrity failures propagate
+to the normal safe error path rather than being mislabeled as duplicate email.
+
+### Engineering lesson / interview talking point
+
+“Translate a database constraint failure only when its identity matches the
+domain case. Catching every integrity error as a conflict would hide unrelated
+schema or persistence failures.”
+
+## PS-015 — Service-specific internal-principal key distribution
+
+### Context and correction
+
+The Gateway-to-Meeting boundary requires the Gateway to sign internal
+principals and Meeting Service to verify them. Docker Compose was corrected so
+the Gateway receives `INTERNAL_PRINCIPAL_PRIVATE_KEY`, Meeting receives only
+`INTERNAL_PRINCIPAL_PUBLIC_KEY`, and Meeting no longer receives the shared
+`.env` file. Meeting's service port is internal to the Compose network.
+
+### Engineering lesson / interview talking point
+
+“Signing and verification have different trust requirements. Restrict the
+private key to the signer and distribute only the public key to verifiers.”
+
+## PS-016 — Refresh-session concurrency and database evidence
+
+### Design
+
+Refresh uses opaque random tokens with SHA-256 hashes at rest. A PostgreSQL
+`SELECT ... FOR UPDATE` locks the matching session while the service validates,
+revokes, inserts a replacement, and commits. This serializes concurrent use of
+one token under PostgreSQL; session state is not global to the user.
+
+### Verification and limitation
+
+Opt-in PostgreSQL tests were added for persistence, rotation/replay, logout,
+independent sessions, concurrent refresh, and rollback. During security testing,
+the configured database was still at `0001_meetings_transcripts` and lacked the
+Phase 4 user/session schema. The opt-in tests were therefore skipped; no
+migration was run. Unit tests exercise service-level token behavior, but
+concurrency and rotation rollback do not yet have executed PostgreSQL evidence.
+
+### Engineering lesson / interview talking point
+
+“A row-lock statement is a concurrency design, not integration proof. Keep
+database tests opt-in for normal development, and state clearly when the live
+schema is too old to run them.”
+
+## PS-017 — Wrapped PostgreSQL Summary uniqueness error
+
+### Context and resolution
+
+The Phase 5 PostgreSQL integration check confirmed that PostgreSQL rejects a
+duplicate `(meeting_id, version)` Summary. However, the asyncpg/SQLAlchemy
+wrapped integrity exception did not expose the constraint name at the location
+that `SummaryService` originally inspected. As a result, the service did not
+translate the duplicate into its expected `ConflictError`.
+
+`SummaryService` now inspects the wrapped exception causes and diagnostics for
+`uq_summaries_meeting_version` before mapping the failure. Other integrity
+errors continue to propagate to normal safe error handling. The PostgreSQL
+integration test now verifies both the actual unique constraint and the
+service-level conflict mapping.
+
+### Engineering lesson / interview talking point
+
+“Database adapters may wrap constraint errors differently. Inspect the
+driver's wrapped exception chain and translate only the known domain
+constraint; PostgreSQL integration tests verify behavior that mocked errors
+cannot.”

@@ -1,17 +1,19 @@
 # MannerAI Meetings Platform — Foundation and Current State
 
-> **Current scope:** Phase 0 through **Phase 3.4**
-> **Current implementation:** PostgreSQL meeting/transcript persistence, internal use cases, and internal create/get meeting routes
+> **Current scope:** Phase 0 through **Phase 5**
+> **Current implementation:** Authentication and refresh sessions, authenticated Gateway-to-Meeting identity, meeting ownership, and persisted Meeting, Transcript, Summary, Task, Decision, and FollowUp APIs
 > **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
 This is the current reference for implemented architecture. The later
 “Phase 2.5 historical snapshot” preserves what was true at that checkpoint;
 it must not be read as the current implementation status.
 
-Phase 3 implemented ORM models, an initial Alembic migration, repositories,
-`MeetingService`, and internal meeting-service create/get routes. Public gateway
-routes remain unimplemented; auth, AI pipelines, search, workers, and frontend
-integration remain deferred.
+Phase 5 completes the Meeting domain persistence and API slice on top of Phase
+4 identity and ownership. PostgreSQL is synchronized through
+`0004_meeting_domain_results`; the integration, security, and full backend
+results are recorded in the Phase 5 section below. MeetingInsight, the public
+organization-wide Meeting list, AI processing, search, workers, and frontend
+integration remain deferred. Phase 6 has not started.
 
 ---
 
@@ -28,6 +30,8 @@ integration remain deferred.
 | 3.2 | Initial Alembic Migration | Complete and applied locally |
 | 3.3 | Repository + Service / Use-Case Layer | Complete |
 | 3.4 | Internal Meeting-service Routes | Complete |
+| 4 | Authentication & Authorization | Complete |
+| 5.1–5.5 | Complete Meeting Domain / Meeting Service MVP | Complete; PostgreSQL synchronized and integration-validated |
 
 ---
 
@@ -52,7 +56,7 @@ flowchart TB
     Nginx -->|"/api/*"| Gateway
     Nginx -->|"/health"| Gateway
 
-    Gateway -.->|future proxy| Meeting
+    Gateway -->|RS256 internal principal| Meeting
     Gateway -.->|future proxy| AI
     Gateway -.->|future proxy| Search
 
@@ -70,6 +74,9 @@ flowchart TB
 - Request correlation (`X-Request-ID`)
 - Standardized error envelope
 - Gateway public API prefix (`/api/v1`) and OpenAPI customization
+- Gateway signup/login, access JWT authentication, and refresh-session lifecycle
+- Current-user profile read and email-only update
+- Authenticated Gateway-to-Meeting facade and Meeting ownership enforcement
 - Async SQLAlchemy PostgreSQL infrastructure
 - meeting-service PostgreSQL lifespan and readiness probing
 - Alembic initial domain revision: `0001_meetings_transcripts`
@@ -78,9 +85,7 @@ flowchart TB
 
 ### Planned / deferred integrations
 
-- Gateway/public business HTTP routes; the meeting-service has only internal create/get meeting routes
-- Gateway proxying to internal services
-- Authentication and authorization
+- Organization membership and authorization for organization-wide meeting listing
 - Redis client wiring
 - Qdrant vector operations
 - Celery worker execution
@@ -95,13 +100,13 @@ Configuration fields and stub modules exist for Redis, Qdrant, and Celery, but t
 
 | Service | Current responsibility | DB access | Status |
 |---------|---------------------|-----------|--------|
-| **gateway-service** | Public API entry, OpenAPI, health probes, `/api/v1` router mount point | None | Foundation only |
-| **meeting-service** | Health probes, PostgreSQL lifecycle/readiness, internal create/get meeting API | **PostgreSQL (active)** | Persistence + internal route slice |
+| **gateway-service** | Public API, auth/user routes, meeting/result facade, OpenAPI, health probes | **PostgreSQL (users/sessions)** | Phase 4 authentication; Phase 5 public v1 proxies |
+| **meeting-service** | Health probes, PostgreSQL lifecycle/readiness, meeting-domain APIs | **PostgreSQL (meetings/transcripts/results)** | Ownership-enforced service and domain persistence |
 | **ai-service** | Health probes | None | Foundation only |
 | **search-service** | Health probes | None | Foundation only |
 | **worker-service** | Health probes | None | Foundation only |
 
-**Database ownership principle:** A service gets database access when it owns a persistence responsibility. meeting-service is the first connected service because it will own meeting/transcript persistence. Gateway, AI, search, and worker PostgreSQL access remain deferred.
+**Database ownership principle:** A service gets database access when it owns a persistence responsibility. Gateway owns user and refresh-session persistence; meeting-service owns meetings, transcripts, summaries, tasks, decisions, and follow-ups. AI, search, and worker PostgreSQL access remains deferred.
 
 ---
 
@@ -274,6 +279,9 @@ Clients never receive: stack traces, database errors, credentials, internal path
 
 ## Phase 2.4 — API Design & Contract Standardization
 
+> Historical checkpoint: this section records Phase 2.4 status. Current route
+> mounts and authentication are described in the Phase 4 section above.
+
 ### Public vs internal APIs
 
 | Boundary | URL pattern | Owner |
@@ -288,9 +296,9 @@ Gateway is the **public API compatibility boundary**. Internal service APIs evol
 
 | Component | Status |
 |-----------|--------|
-| Gateway `api_v1_router` | Mounted at `/api/v1` (empty — no business routes) |
-| Gateway business routers (`auth`, `users`, `meetings`, …) | Scaffolded in `app/routes/` — **not mounted** |
-| meeting-service routers | Scaffolded — **not mounted** |
+| Gateway `api_v1_router` | Mounted at `/api/v1` (empty at this checkpoint) |
+| Gateway business routers (`auth`, `users`, `meetings`, …) | Scaffolded at this checkpoint — **not mounted** |
+| meeting-service routers | Scaffolded at this checkpoint — **not mounted** |
 | search-service router | Scaffolded at `app/routes/search.py` — **not mounted** |
 
 No fake or 501 placeholder endpoints exist.
@@ -323,7 +331,7 @@ Defaults: `page=1`, `page_size=20`, max `page_size=100`. Implemented as schemas/
 ### Public schema safety
 
 - `MeetingPublic` excludes `organization_id` and `created_by` (present on `MeetingInDB`)
-- `UserPublic` excludes `hashed_password` (present on `UserInDB`)
+- `UserPublic` excludes `password_hash` (present on `UserInDB`)
 
 ### Nginx
 
@@ -331,7 +339,213 @@ Defaults: `page=1`, `page_size=20`, max `page_size=100`. Implemented as schemas/
 
 ---
 
-## Phase 3 current persistence architecture
+## Phase 4 current authentication and authorization architecture
+
+### User authentication and self-service
+
+`User` persistence stores a unique canonical email and a password hash. Signup
+does not create an authenticated session. Login verifies the password and
+returns a signed access JWT plus an opaque refresh token. Passwords are hashed
+with Passlib `pbkdf2_sha256`; unknown or malformed stored hashes fail as
+authentication failures. Duplicate-email races are translated to a conflict
+only when the named unique-email constraint caused the `IntegrityError`.
+
+The access JWT carries `sub` (user UUID), `type=access`, `iat`, and `exp`, and is
+signed with the configured HS256 key. `get_current_user()` verifies signature
+and expiry, requires the access type and UUID subject, and loads the persisted
+user. Missing credentials, invalid/expired tokens, unknown users, and bad
+passwords use generic 401 semantics. `/api/v1/auth/me` and `/api/v1/users/me`
+return `UserPublic`; `PATCH /api/v1/users/me` accepts email only. Extra fields,
+including `password` and `password_hash`, are forbidden. The user repository
+performs persistence, `UserService` coordinates profile changes and commits,
+and escaping exceptions are rolled back by the session dependency.
+
+### Gateway-to-Meeting trust boundary
+
+```text
+External client → Gateway: access JWT
+Gateway: verify JWT + resolve persisted user
+Gateway → Meeting Service: short-lived RS256 internal principal
+Meeting Service: verify principal using Gateway public key
+```
+
+The internal principal includes `sub`, `type=internal_principal`, `iss`, `aud`,
+`iat`, and `exp`. The Gateway signs with its private key; Meeting Service only
+receives the matching public key. Meeting does not trust caller-supplied user
+IDs and does not validate the external JWT: only the Gateway owns that public
+authentication contract and can translate an authenticated identity into a
+service-specific assertion. Docker Compose was corrected to pass the private
+key only to Gateway and the public key only to Meeting; Meeting no longer gets
+the shared `.env` file that could distribute the private key to it. Its port is
+internal (`expose`) rather than host-published.
+
+### Meeting ownership and list-route boundary
+
+Gateway derives user identity from `get_current_user()` and passes it to the
+Meeting client; the client signs it into the internal principal. Meeting
+Service stores the asserted UUID as `created_by`. `MeetingService` checks that
+owner before reading/updating an individual meeting or creating, reading, or
+replacing its transcript. A non-owner receives a forbidden response. Client
+payloads cannot set `created_by` and do not determine authenticated ownership.
+
+The internal `GET /meetings?organization_id=...` list route intentionally
+remains without internal-principal or organization-membership authorization.
+There is no organization membership model yet; this route is internal-only and
+not an authorization boundary for clients. The public Gateway facade currently
+does not expose that list operation.
+
+### Refresh-token and session lifecycle
+
+Each login creates an independent `RefreshSession`. Refresh tokens are opaque
+384-bit random values generated with Python's `secrets` module; only
+`SHA-256(token)` is persisted. The default session lifetime is 30 days, bounded
+by configuration. Refresh validates the hash, session state, expiration, and
+associated user; then it revokes the old session, creates a replacement, and
+commits the rotation transaction. The repository selects the row with
+`FOR UPDATE`, serializing concurrent refresh attempts for the same token under
+PostgreSQL. Logout revokes only the submitted session. Invalid/revoked/expired
+tokens use a generic authentication failure. Access JWTs are not refresh tokens
+and are not revoked by logout; they remain valid until expiration.
+
+Migration `0002_users` adds users; `0003_refresh_sessions` adds refresh-session
+storage after it. The code migration head is `0003_refresh_sessions`. During the
+security-testing checkpoint, the configured database still reported revision
+`0001_meetings_transcripts`, so database-backed lifecycle, concurrency, and
+rollback tests remained skipped rather than running against an outdated schema.
+
+### Phase 4 security verification
+
+Normal verification reported **50 focused security tests: 44 passed, 6 skipped**
+and **209 full backend tests: 202 passed, 7 skipped**. The skipped tests are
+opt-in PostgreSQL tests guarded by `RUN_POSTGRES_INTEGRATION=1`. The six new
+refresh-session persistence, rotation/reuse, logout, multi-session, concurrency,
+and rollback tests were added but not executed because the database lacked the
+Phase 4 schema. Unit tests cover token generation/storage, service-level
+rotation and validation, authentication dependencies, user self-service,
+Meeting ownership, and internal-principal validation. Concurrency and
+rotation-rollback did not yet have executed PostgreSQL integration evidence at
+the Phase 4 checkpoint. See the Phase 5 validation below for the completed
+database run.
+
+## Phase 5 — Complete Meeting Domain / Meeting Service MVP
+
+Phase 5 Blocks 1–5 are complete. The Meeting Service owns this domain flow:
+
+```text
+Client → Gateway → Meeting Service route → domain service
+       → repository → AsyncSession → PostgreSQL
+```
+
+Routes validate request/response contracts, extract the signed internal user
+identity, and invoke services. Services enforce ownership, coordinate domain
+use cases, map ORM entities to Pydantic DTOs, and commit successful writes.
+Repositories perform SQLAlchemy persistence/query operations and `flush()`;
+they do not commit or roll back. The request-scoped session dependency rolls
+back when an exception escapes. ORM models describe persistence, repositories
+return ORM entities, services map them, and API schemas define client-facing
+requests/responses.
+
+### Completed domain and relationships
+
+- **User:** authentication identity with assigned Tasks; Organization membership
+  is not implemented.
+- **Meeting:** aggregate root with one optional Transcript and zero or many
+  Summary versions, Tasks, Decisions, and FollowUp drafts.
+- **Transcript:** one per Meeting (`meeting_id` unique); Meeting deletion
+  cascades to it.
+- **Summary:** zero or many per Meeting; positive version, default `1`, and
+  unique `(meeting_id, version)`; the latest-version lookup orders by version
+  descending. The service accepts an explicit version, but the current HTTP
+  create route always uses version `1` because its request has no version field.
+- **Task:** belongs to one Meeting and may reference one User as assignee;
+  deleting its Meeting cascades, while deleting its assignee sets
+  `assignee_id` to `NULL`.
+- **Decision** and **FollowUp:** each belongs to one Meeting; Meeting deletion
+  cascades to these records.
+
+Revision `0004_meeting_domain_results` adds Summary, Task, Decision, and FollowUp
+tables, native Task/FollowUp status enums, uniqueness/check constraints, foreign
+keys, and indexes. `ix_summaries_meeting_version_desc`, the unique
+`uq_summaries_meeting_version`, Task meeting/status and assignee/status indexes,
+and meeting indexes on Decision and FollowUp support the implemented queries.
+Migration `0004` follows `0003_refresh_sessions`; the chain is linear:
+`0001_meetings_transcripts → 0002_users → 0003_refresh_sessions →
+0004_meeting_domain_results`.
+
+### Repository and service behavior
+
+The Summary, Task, Decision, and FollowUp repositories provide create/get/list
+operations; Task and FollowUp also provide update. Repositories use
+`AsyncSession.execute()` with SQLAlchemy `select()` and deterministic ordering:
+Summary versions ascending (latest lookup descending), Tasks and FollowUps by
+`created_at DESC, id DESC`, and Decisions by `created_at ASC, id ASC`. Lists
+apply their supported status filters in the query. Services serialize scalar
+fields into DTOs and do not traverse ORM relationships for response data; this
+avoids implicit async lazy-loading and relationship-driven N+1 queries.
+
+`MeetingService.require_owned_meeting()` is the canonical ownership primitive.
+Each domain service authorizes the Meeting before create/list; reads and
+updates by result ID load the result, resolve its Meeting, and authorize that
+Meeting before returning or changing it. Task and FollowUp updates apply only
+provided fields; Meeting association is immutable. Summary service version
+assignment is explicit (default `1`) and is not automatically incremented; the
+current HTTP create route exposes only the default, so later versions cannot
+yet be created through the API.
+
+### API and Gateway surface
+
+Meeting Service exposes internal nested routes; Gateway exposes their public
+`/api/v1` proxies. Gateway validates the external access token, derives user
+identity, and forwards a signed internal principal plus `X-Request-ID`. Create
+requests omit the parent Meeting ID so clients cannot override route ownership.
+Result ID operations verify both Meeting ownership and URL-parent consistency.
+Lists use shared `PaginationParams`/`PaginatedResponse`; Task and FollowUp lists
+support `?status=`.
+
+| Resource | Implemented operations |
+|----------|-----------------------|
+| Summary | `POST`, paginated `GET`, `GET /latest`, `GET /{summary_id}` |
+| Task | `POST`, paginated/status-filtered `GET`, `GET /{task_id}`, `PATCH /{task_id}` |
+| Decision | `POST`, paginated `GET`, `GET /{decision_id}` |
+| FollowUp | `POST`, paginated/status-filtered `GET`, `GET /{followup_id}`, `PATCH /{followup_id}` |
+
+The public organization-wide Meeting list remains deferred. There is no
+persisted Organization or membership model; `organization_id` and `created_by`
+are UUIDs without foreign keys and do not establish membership authorization.
+A safe public list requires persisted user-to-organization membership and a
+downstream authorization policy. Phase 5 also defines no searchable or
+client-sortable Meeting fields. The internal list remains deterministic by
+`created_at DESC, id DESC`; no search infrastructure or client-selected sort
+was added.
+
+MeetingInsight remains deferred because its persisted shape, row cardinality,
+and lifecycle/version semantics are undefined. No AI generation, workers,
+vector search, or Phase 6 functionality is included in Phase 5.
+
+### PostgreSQL synchronization and verification
+
+The configured local development database was at `0001_meetings_transcripts`.
+After verifying it was the project-local development database, `alembic upgrade
+head` applied revisions `0002` through `0004`. Final `alembic current` reports
+`0004_meeting_domain_results (head)` and `alembic check` reports no pending
+upgrade operations. PostgreSQL integration tests verified persistence and
+retrieval for the Meeting/Transcript/result rows, Summary uniqueness and latest
+ordering, Task/FollowUp status filters, task assignee `ON DELETE SET NULL`, and
+Meeting-child `ON DELETE CASCADE`.
+
+Final Phase 5 verification used the project `.venv`: **7 PostgreSQL integration
+tests passed**, **86 focused Phase 5/API tests passed**, **140 security
+regression tests passed**, and the **full backend suite passed 259 tests** with
+`RUN_POSTGRES_INTEGRATION=1`. `git diff --check` passed.
+
+PostgreSQL exposed one issue not covered by mocked unit tests: the asyncpg /
+SQLAlchemy uniqueness exception wrapper did not expose the Summary constraint
+name at the location originally inspected. `SummaryService` now inspects the
+wrapped exception causes/diagnostics and maps the duplicate
+`(meeting_id, version)` constraint to `ConflictError`. The live integration test
+confirmed the behavior.
+
+## Phase 3 persistence architecture (historical baseline)
 
 ### Domain model and schema
 
@@ -553,14 +767,26 @@ alembic -c alembic.ini upgrade head
 | `test_exceptions.py` | 2.3 | Error envelope, handlers, 404 |
 | `test_api.py` | 2.4 | API prefix, pagination, OpenAPI, schemas |
 | `test_database.py` | 2.5 | Engine, session, Alembic, readiness |
+| `test_auth_routes.py`, `test_authentication_service.py`, `test_current_user_dependency.py` | 4 | Signup/login, refresh lifecycle, access-token validation |
+| `test_user_routes.py`, `test_user_service.py` | 4 | Current-user profile and email-only update |
+| `test_internal_principal.py`, `test_gateway_meeting_routes.py` | 4 | Signed identity boundary and Gateway forwarding |
+| `test_meeting_service.py`, `test_meeting_routes.py`, `test_transcript_routes.py` | 4 | Ownership, meeting/transcript authorization |
+| `test_auth_postgres_integration.py` | 4 | Opt-in real refresh-session lifecycle/concurrency/rollback |
+| `test_phase5_domain_models.py` | 5 | Result ORM metadata, relationships, and migration structure |
+| `test_meeting_domain_repositories.py` | 5 | Meeting-scoped persistence and query behavior |
+| `test_meeting_domain_services.py` | 5 | Domain operations, commits, conflicts, and ownership |
+| `test_meeting_domain_routes.py`, `test_gateway_meeting_results.py` | 5 | Result APIs, authorization, and Gateway proxies |
+| `test_phase5_postgres_integration.py` | 5 | Opt-in PostgreSQL result persistence and constraints |
 
-### Current verified count
+### Phase 4 checkpoint count
 
 ```
 Ran 71 tests — OK (1 skipped)
 ```
 
-The skipped test is the opt-in PostgreSQL integration test (`RUN_POSTGRES_INTEGRATION=1`).
+This is the Phase 4 checkpoint count. Its skipped test was the opt-in
+PostgreSQL integration test (`RUN_POSTGRES_INTEGRATION=1`). Phase 5 final
+validation counts are documented in the Phase 5 section above.
 
 ### Test categories
 
@@ -644,7 +870,7 @@ meeting-summarizer-follow-up-ai-agent/
 | Transactions | Service-layer ownership | Simple; no premature Unit of Work |
 | Migrations | One Alembic at repo root | Single schema; shared metadata |
 | Initial DB owner | meeting-service | Owns meeting/transcript persistence |
-| Business migrations | Deferred until ORM models | No fake initial migration |
+| Business migrations | Alembic revisions 0001–0003 | Ordered schema changes for meetings, users, and refresh sessions |
 | Docker | Deferred | Local venv development first |
 | Success response wrapper | No universal `{data: ...}` | Direct resource responses; envelope only for lists/errors |
 
@@ -660,25 +886,27 @@ meeting-summarizer-follow-up-ai-agent/
 - Credentials excluded from logs (`database_url`, API keys, JWT, Redis URLs)
 - Generic 500 responses — no tracebacks or internal messages to clients
 - Request middleware does not log authorization headers, cookies, or bodies
+- Passwords use one-way `pbkdf2_sha256` hashes; public DTOs exclude `password_hash`
+- Refresh tokens are opaque, hashed at rest, rotated, and independently revoked per session
+- Internal principals are signed by Gateway and verified by Meeting using service-specific key distribution
+- Invalid authentication failures use generic client-facing messages
 - Readiness failures return safe `SERVICE_UNAVAILABLE` message
 
 ### Future security work
 
-- Authentication and authorization
 - Rate limiting
 - SSL/TLS for PostgreSQL in production
 - `database_url` as `SecretStr`
 - Gateway upstream error mapping (502/504)
-- Multi-tenancy enforcement at query level
+- Organization membership and authorization for organization-wide meeting listing
 
 ---
 
 ## Deferred / Not Yet Implemented
 
-- Business ORM models and Alembic revisions
-- Business HTTP routes (auth, meetings, search, analytics, integrations)
-- Authentication persistence and gateway DB access
-- meeting CRUD, transcript storage, upload processing
+- Organization membership and authorization for organization-wide meeting listing
+- Public Gateway listing of meetings by organization
+- AI artifacts and meeting upload processing
 - AI agents, LLM pipelines, summarization
 - Semantic search and vector indexing
 - Celery task execution and worker DB strategy

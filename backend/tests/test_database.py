@@ -224,7 +224,16 @@ class DatabaseFoundationTestCase(unittest.TestCase):
 
         self.assertEqual(
             set(Base.metadata.tables),
-            {"meetings", "transcripts", "users", "refresh_sessions"},
+            {
+                "meetings",
+                "transcripts",
+                "users",
+                "refresh_sessions",
+                "summaries",
+                "tasks",
+                "decisions",
+                "followups",
+            },
         )
         self.assertEqual(Meeting.__table__.c.status.type.enums, [
             "pending",
