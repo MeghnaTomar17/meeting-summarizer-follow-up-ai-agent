@@ -41,9 +41,29 @@ class ProcessingResult(BaseModel):
     sections: dict[ProcessingOperation, JsonValue] = Field(default_factory=dict)
 
 
+class ModelRequest(BaseModel):
+    """Provider-neutral instructions, input, and optional JSON output schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instructions: str = Field(min_length=1)
+    input_text: str = Field(min_length=1)
+    response_schema: dict[str, JsonValue] | None = None
+
+
+class ModelResponse(BaseModel):
+    """Provider-neutral raw model content; the caller validates its structure."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+
+
 __all__ = [
     "ProcessingOperation",
     "ProcessingRequest",
     "ProcessingResult",
     "ProcessingStatus",
+    "ModelRequest",
+    "ModelResponse",
 ]
