@@ -1,17 +1,25 @@
-"""
-Purpose: Coordinate multi-agent AI workflow for a meeting.
-Future responsibilities: Pipeline ordering, retries, partial failure handling.
-Service ownership: ai-service.
-"""
+"""Provider-independent foundation for future AI processing orchestration."""
 
 from __future__ import annotations
 
-from typing import Any
+from app.contracts import ProcessingRequest, ProcessingResult, ProcessingStatus
 
 
-class AgentOrchestrator:
-    """Run summary → tasks → decisions → followup → insights — TODO."""
+class AIProcessingOrchestrator:
+    """Validate the contract and report that execution is not implemented yet.
 
-    async def run(self, meeting_id: str, transcript: dict[str, Any]) -> dict[str, Any]:
-        _ = (meeting_id, transcript)
-        raise NotImplementedError
+    This boundary deliberately has no provider, agent, database, or network
+    dependency. A later block can inject those collaborators behind this API.
+    """
+
+    async def process(self, request: ProcessingRequest) -> ProcessingResult:
+        return ProcessingResult(
+            meeting_id=request.meeting_id,
+            transcript_id=request.transcript_id,
+            requested_operations=request.requested_operations,
+            status=ProcessingStatus.NOT_IMPLEMENTED,
+            sections={},
+        )
+
+
+__all__ = ["AIProcessingOrchestrator"]

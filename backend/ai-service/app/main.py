@@ -21,14 +21,14 @@ init_service_logging(get_settings)
 app = FastAPI(
     title="MannerAI AI Service",
     version="0.1.0",
-    description="Agents, LLM pipelines, summarization and extraction.",
+    description="Internal AI processing foundation; provider execution is not implemented.",
 )
 
 register_logging_middleware(app)
 register_exception_handlers(app)
 
-# TODO: routes for on-demand processing (internal only)
-# TODO: restrict to service mesh / internal network
+# Processing routes are deferred until the internal invocation/authentication
+# contract is defined. This service is not mounted on the public Gateway.
 
 
 @app.get("/health")
