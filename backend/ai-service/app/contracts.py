@@ -5,7 +5,9 @@ from __future__ import annotations
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+
+from shared.schemas.transcript import TranscriptSegment
 
 
 class ProcessingOperation(StrEnum):
@@ -14,6 +16,14 @@ class ProcessingOperation(StrEnum):
     DECISIONS = "decisions"
     FOLLOW_UPS = "follow_ups"
     INSIGHTS = "insights"
+
+
+class AgentKind(StrEnum):
+    SUMMARY = "summary"
+    TASK = "task"
+    DECISION = "decision"
+    FOLLOW_UP = "follow_up"
+    INSIGHT = "insight"
 
 
 class ProcessingStatus(StrEnum):
@@ -41,6 +51,35 @@ class ProcessingResult(BaseModel):
     sections: dict[ProcessingOperation, JsonValue] = Field(default_factory=dict)
 
 
+class TranscriptContent(BaseModel):
+    """Transcript data supplied to AI agents by their caller."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transcript_id: UUID
+    language: str | None = None
+    segments: list[TranscriptSegment] = Field(min_length=1)
+
+    @field_validator("segments")
+    @classmethod
+    def require_nonblank_content(
+        cls, segments: list[TranscriptSegment]
+    ) -> list[TranscriptSegment]:
+        if not any(segment.text.strip() for segment in segments):
+            raise ValueError("Transcript content is required.")
+        return segments
+
+
+class AgentInput(BaseModel):
+    """Common agent input with transcript content already retrieved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    meeting_id: UUID
+    transcript: TranscriptContent
+    meeting_context: dict[str, str] | None = None
+
+
 class ModelRequest(BaseModel):
     """Provider-neutral instructions, input, and optional JSON output schema."""
 
@@ -61,9 +100,12 @@ class ModelResponse(BaseModel):
 
 __all__ = [
     "ProcessingOperation",
+    "AgentKind",
     "ProcessingRequest",
     "ProcessingResult",
     "ProcessingStatus",
+    "AgentInput",
+    "TranscriptContent",
     "ModelRequest",
     "ModelResponse",
 ]

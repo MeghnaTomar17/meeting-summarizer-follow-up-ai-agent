@@ -4,23 +4,18 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.contracts import (
+    AgentInput,
     ModelRequest,
-    ModelResponse,
     ProcessingRequest,
     ProcessingResult,
     ProcessingStatus,
 )
-from llm.errors import (
-    MalformedModelOutputError,
-    ModelExecutionError,
-    ModelTimeoutError,
-    ProviderNotConfiguredError,
-    UnexpectedModelProviderError,
-)
+from agents.base import Agent, TAgentOutput
 from llm.provider import ModelProvider
+from llm.structured_output import generate_structured_output
 
 TOutput = TypeVar("TOutput", bound=BaseModel)
 
@@ -51,29 +46,19 @@ class AIProcessingOrchestrator:
         output_model: type[TOutput],
     ) -> TOutput:
         """Generate provider-neutral content and validate it as a Pydantic model."""
-        if self._model_provider is None:
-            raise ProviderNotConfiguredError()
-
-        provider_request = request.model_copy(
-            update={"response_schema": output_model.model_json_schema()}
+        return await generate_structured_output(
+            self._model_provider,
+            request,
+            output_model,
         )
-        try:
-            response = await self._model_provider.generate(provider_request)
-            if not isinstance(response, ModelResponse):
-                response = ModelResponse.model_validate(response)
-        except ModelExecutionError:
-            raise
-        except ValidationError:
-            raise MalformedModelOutputError() from None
-        except TimeoutError:
-            raise ModelTimeoutError() from None
-        except Exception:
-            raise UnexpectedModelProviderError() from None
 
-        try:
-            return output_model.model_validate_json(response.content)
-        except ValidationError:
-            raise MalformedModelOutputError() from None
+    async def execute_agent(
+        self,
+        agent: Agent[TAgentOutput],
+        agent_input: AgentInput,
+    ) -> TAgentOutput:
+        """Delegate to one typed agent without selecting a workflow or registry."""
+        return await agent.execute(agent_input)
 
 
 __all__ = ["AIProcessingOrchestrator"]
