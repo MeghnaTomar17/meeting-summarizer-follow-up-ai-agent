@@ -29,7 +29,10 @@ if str(BACKEND_ROOT) not in sys.path:
 def _load_ai_module(module_name: str):
     """Import an AI module without reusing another service's generic `app` package."""
     for key in list(sys.modules):
-        if key == "app" or key.startswith("app."):
+        if any(
+            key == package or key.startswith(f"{package}.")
+            for package in ("app", "agents", "llm", "pipelines")
+        ):
             del sys.modules[key]
     for service_name in SERVICE_NAMES:
         service_root = str(BACKEND_ROOT / service_name)
@@ -66,6 +69,7 @@ class AIServiceConfigurationTestCase(unittest.TestCase):
 class AIProcessingContractTestCase(unittest.TestCase):
     def test_valid_request_and_future_result_contract_validate(self) -> None:
         module = _load_ai_module("app.contracts")
+        result_models = importlib.import_module("app.processing_results")
         request = module.ProcessingRequest.model_validate(
             {
                 "meeting_id": "d146f98d-d557-4b89-a746-3e48e73d46b1",
@@ -74,20 +78,36 @@ class AIProcessingContractTestCase(unittest.TestCase):
                 "context": {"locale": "en"},
             }
         )
-        result = module.ProcessingResult(
+        result = result_models.ProcessingResult(
             meeting_id=request.meeting_id,
             transcript_id=request.transcript_id,
             requested_operations=request.requested_operations,
-            status=module.ProcessingStatus.NOT_IMPLEMENTED,
+            status=module.ProcessingStatus.COMPLETED,
+            results=[
+                result_models.OperationResult(
+                    operation=module.ProcessingOperation.SUMMARY,
+                    status=result_models.OperationStatus.COMPLETED,
+                    output=importlib.import_module("agents.summary_agent").SummaryAgentOutput(
+                        content="A concise summary.", key_topics=[]
+                    ),
+                ),
+                result_models.OperationResult(
+                    operation=module.ProcessingOperation.TASKS,
+                    status=result_models.OperationStatus.COMPLETED,
+                    output=importlib.import_module("agents.task_agent").TaskAgentOutput(
+                        tasks=[]
+                    ),
+                ),
+            ],
         )
 
         self.assertEqual(
             request.requested_operations[0], module.ProcessingOperation.SUMMARY
         )
-        self.assertEqual(result.status.value, "not_implemented")
-        self.assertEqual(result.sections, {})
-        self.assertEqual(result.model_dump(mode="json")["status"], "not_implemented")
-        self.assertEqual(result.model_dump(mode="json")["sections"], {})
+        self.assertEqual(result.status.value, "completed")
+        self.assertEqual(len(result.results), 2)
+        self.assertEqual(result.model_dump(mode="json")["status"], "completed")
+        self.assertEqual(result.results[0].operation, module.ProcessingOperation.SUMMARY)
 
     def test_invalid_or_client_owned_request_fields_are_rejected(self) -> None:
         module = _load_ai_module("app.contracts")
@@ -111,20 +131,34 @@ class AIProcessingContractTestCase(unittest.TestCase):
 
 
 class AIServiceOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
-    async def test_orchestrator_is_independent_and_never_returns_fake_success(self) -> None:
-        contracts = _load_ai_module("app.contracts")
+    async def test_orchestrator_reports_unconfigured_provider_without_fake_success(self) -> None:
         orchestrator_module = _load_ai_module("agents.orchestrator")
+        contracts = importlib.import_module("app.contracts")
+        results_module = importlib.import_module("app.processing_results")
         request = contracts.ProcessingRequest(
             meeting_id="d146f98d-d557-4b89-a746-3e48e73d46b1",
             transcript_id="084c3a14-1a7f-41c9-a7c8-1e195aa5313a",
             requested_operations=["summary", "tasks"],
         )
+        agent_input = contracts.AgentInput(
+            meeting_id=request.meeting_id,
+            transcript={
+                "transcript_id": request.transcript_id,
+                "segments": [{"index": 0, "text": "Discussed project status."}],
+            },
+        )
 
         orchestrator = orchestrator_module.AIProcessingOrchestrator()
-        result = await orchestrator.process(request)
+        result = await orchestrator.process(request, agent_input)
 
-        self.assertEqual(result.status, contracts.ProcessingStatus.NOT_IMPLEMENTED)
-        self.assertEqual(result.sections, {})
+        self.assertEqual(result.status, contracts.ProcessingStatus.FAILED)
+        self.assertEqual(
+            [entry.error.code for entry in result.results],
+            [
+                results_module.ProcessingErrorCode.PROVIDER_NOT_CONFIGURED,
+                results_module.ProcessingErrorCode.PROVIDER_NOT_CONFIGURED,
+            ],
+        )
         self.assertEqual(result.requested_operations, request.requested_operations)
 
     def test_imports_work_without_provider_clients_or_sqlalchemy(self) -> None:
@@ -137,15 +171,23 @@ def guarded_import(name, *args, **kwargs):
     return real_import(name, *args, **kwargs)
 builtins.__import__ = guarded_import
 import asyncio
-from app.contracts import ProcessingRequest
+from app.contracts import AgentInput, ProcessingRequest
 from agents.orchestrator import AIProcessingOrchestrator
 request = ProcessingRequest(
     meeting_id='d146f98d-d557-4b89-a746-3e48e73d46b1',
     transcript_id='084c3a14-1a7f-41c9-a7c8-1e195aa5313a',
     requested_operations=['summary'],
 )
-result = asyncio.run(AIProcessingOrchestrator().process(request))
-assert result.status.value == 'not_implemented' and result.sections == {}
+agent_input = AgentInput(
+    meeting_id=request.meeting_id,
+    transcript={
+        'transcript_id': request.transcript_id,
+        'segments': [{'index': 0, 'text': 'A meeting took place.'}],
+    },
+)
+result = asyncio.run(AIProcessingOrchestrator().process(request, agent_input))
+assert result.status.value == 'failed'
+assert result.results[0].error.code.value == 'provider_not_configured'
 """
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join(

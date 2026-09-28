@@ -27,7 +27,9 @@ class AgentKind(StrEnum):
 
 
 class ProcessingStatus(StrEnum):
-    NOT_IMPLEMENTED = "not_implemented"
+    COMPLETED = "completed"
+    PARTIALLY_FAILED = "partially_failed"
+    FAILED = "failed"
 
 
 class ProcessingRequest(BaseModel):
@@ -40,15 +42,13 @@ class ProcessingRequest(BaseModel):
     requested_operations: list[ProcessingOperation] = Field(min_length=1)
     context: dict[str, str] | None = None
 
-
-class ProcessingResult(BaseModel):
-    """Structured handoff; empty sections are explicit until agents exist."""
-
-    meeting_id: UUID
-    transcript_id: UUID
-    requested_operations: list[ProcessingOperation]
-    status: ProcessingStatus
-    sections: dict[ProcessingOperation, JsonValue] = Field(default_factory=dict)
+    @field_validator("requested_operations")
+    @classmethod
+    def deduplicate_operations_preserving_order(
+        cls, operations: list[ProcessingOperation]
+    ) -> list[ProcessingOperation]:
+        """Keep each requested agent operation to one deterministic execution."""
+        return list(dict.fromkeys(operations))
 
 
 class TranscriptContent(BaseModel):
@@ -102,7 +102,6 @@ __all__ = [
     "ProcessingOperation",
     "AgentKind",
     "ProcessingRequest",
-    "ProcessingResult",
     "ProcessingStatus",
     "AgentInput",
     "TranscriptContent",
