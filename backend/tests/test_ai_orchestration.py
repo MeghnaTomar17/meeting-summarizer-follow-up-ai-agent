@@ -318,6 +318,36 @@ class AIOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 output=summary,
             )
 
+    def test_aggregate_contract_rejects_duplicate_requested_operations(self):
+        with self.assertRaises(ValidationError):
+            self.results.ProcessingResult(
+                meeting_id=self.meeting_id,
+                transcript_id=self.transcript_id,
+                requested_operations=[
+                    self.contracts.ProcessingOperation.SUMMARY,
+                    self.contracts.ProcessingOperation.SUMMARY,
+                ],
+                status=self.contracts.ProcessingStatus.FAILED,
+                results=[
+                    self.results.OperationResult(
+                        operation=self.contracts.ProcessingOperation.SUMMARY,
+                        status=self.results.OperationStatus.FAILED,
+                        error=self.results.ProcessingFailure(
+                            code=self.results.ProcessingErrorCode.MALFORMED_OUTPUT,
+                            message="The model returned invalid output.",
+                        ),
+                    ),
+                    self.results.OperationResult(
+                        operation=self.contracts.ProcessingOperation.SUMMARY,
+                        status=self.results.OperationStatus.FAILED,
+                        error=self.results.ProcessingFailure(
+                            code=self.results.ProcessingErrorCode.MALFORMED_OUTPUT,
+                            message="The model returned invalid output.",
+                        ),
+                    ),
+                ],
+            )
+
     def test_orchestration_import_has_no_database_or_provider_sdk_dependency(self):
         guarded_script = """
 import builtins

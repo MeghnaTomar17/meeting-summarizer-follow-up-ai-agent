@@ -106,6 +106,8 @@ class ProcessingResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_requested_operation_outcomes(self) -> "ProcessingResult":
+        if len(set(self.requested_operations)) != len(self.requested_operations):
+            raise ValueError("Requested operations must be unique.")
         operations = [result.operation for result in self.results]
         if operations != self.requested_operations:
             raise ValueError("Results must match requested operations in order.")
