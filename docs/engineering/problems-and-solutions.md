@@ -1,6 +1,6 @@
 # Engineering Problems and Solutions
 
-This is a factual record of meaningful issues encountered through Phase 5.
+This is a factual record of meaningful issues encountered through Phase 6.
 It complements the current architecture documents; it does not turn deferred
 design choices into completed work.
 
@@ -424,3 +424,29 @@ service-level conflict mapping.
 driver's wrapped exception chain and translate only the known domain
 constraint; PostgreSQL integration tests verify behavior that mocked errors
 cannot.”
+
+## PS-018 — Duplicate operations in directly constructed AI results
+
+### Context and problem
+
+The Phase 6 AI orchestration request contract deduplicates requested
+operations while preserving order. During the final adversarial review, the
+aggregate `ProcessingResult` contract was found to accept a directly
+constructed result whose requested operations and matching operation outcomes
+contained duplicates. That allowed an aggregate state the request contract
+could never produce through normal orchestration.
+
+### Solution and validation
+
+`ProcessingResult` now rejects duplicate requested operations as part of its
+model validation. A regression test constructs a duplicated aggregate and
+asserts validation fails. The AI suite passed **91 tests**; the full backend
+suite passed with **350 run and 8 skipped**. PostgreSQL integration tests were
+skipped because `RUN_POSTGRES_INTEGRATION` was not enabled; no database-backed
+claim is made for this fix.
+
+### Engineering lesson / interview talking point
+
+“An aggregate contract should enforce its invariants itself, even if normal
+request construction already guarantees them. Validate uniqueness at both the
+request and result boundaries.”

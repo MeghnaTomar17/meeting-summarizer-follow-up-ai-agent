@@ -1,12 +1,12 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — current architecture through Phase 5.
+> MannerAI Meetings Platform — current architecture through Phase 6.
 
-**Entry point:** For the consolidated current reference and Phase 5 checkpoint, see [project-foundation.md](./project-foundation.md).
+**Entry point:** For the consolidated current reference and Phase 6 checkpoint, see [project-foundation.md](./project-foundation.md).
 
 ## System context
 
-The platform ingests meeting recordings and transcripts, runs AI pipelines for summaries and extractions, indexes content for semantic search, and exposes a React dashboard via an API gateway.
+The platform persists meetings, transcripts, and meeting results behind a Gateway and Meeting Service. The AI Service now contains a provider-independent foundation for transcript-grounded summaries and extractions. Live model-provider execution, result persistence mapping, semantic indexing, and the frontend workflow are not yet integrated.
 
 ## Microservices
 
@@ -14,15 +14,15 @@ The platform ingests meeting recordings and transcripts, runs AI pipelines for s
 |---------|----------------|
 | gateway-service | Auth, routing, validation, public API |
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
-| ai-service | Agents, LLM pipelines, prompts |
-| search-service | Chunking, embeddings, Qdrant retrieval |
-| worker-service | Async jobs (Celery) |
+| ai-service | Typed processing contracts, five agents, provider abstraction, and deterministic orchestration; no real provider or persistence integration |
+| search-service | Health service; chunking, embeddings, and Qdrant retrieval remain deferred |
+| worker-service | Health service; Celery background execution remains deferred |
 
 ## Data stores
 
 - **PostgreSQL** — users, refresh sessions, meetings, transcripts, and meeting results
-- **Redis** — cache, sessions, Celery broker
-- **Qdrant** — vector index for transcript chunks
+- **Redis** — configured for future cache/broker use; not wired to AI processing
+- **Qdrant** — planned vector index; retrieval integration is deferred
 
 ## Persistence layer
 
@@ -120,4 +120,7 @@ For the detailed, current reference see [project-foundation.md](./project-founda
 
 - Sequence diagrams for upload → process → index flow
 - Organization membership and authorization for organization-wide listing
-- AI, semantic search, worker, and frontend integration (Phase 6 onward; not started)
+- Real `ModelProvider` implementation and provider-specific integration
+- Mapping AI outputs to Meeting Service persistence contracts; MeetingInsight persistence design
+- Production pipeline/Gateway integration, background processing, Redis/Celery, semantic search, and frontend integration
+- Docker/infrastructure work and later Phase 7+ roadmap work

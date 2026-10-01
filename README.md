@@ -4,7 +4,7 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 
 ## Status
 
-**Current checkpoint: Phase 5 complete** — the Meeting domain includes persisted meetings, transcripts, summaries, tasks, decisions, and follow-up drafts, exposed through authenticated Meeting Service APIs and public Gateway v1 proxies. PostgreSQL is at migration head `0004_meeting_domain_results`; integration, security, and full backend validation passed. MeetingInsight and public organization-wide Meeting listing remain deferred; Phase 6 AI processing has not started.
+**Current checkpoint: Phase 6 complete** — Phase 6 adds a provider-independent AI Service foundation with typed processing contracts, a shared agent architecture, five transcript-grounded agents, deterministic orchestration, structured-output validation, and sanitized failures. The Meeting domain continues to own persisted meetings, transcripts, summaries, tasks, decisions, and follow-up drafts. No real model provider, AI-result persistence mapping, MeetingInsight persistence model, or production pipeline integration is implemented. Public organization-wide Meeting listing and Docker deployment/testing remain deferred. See [the current architecture and Phase 6 checkpoint](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -15,8 +15,8 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 | Frontend | React, TypeScript, Vite, TailwindCSS |
 | Backend | FastAPI (microservices) |
 | Data | PostgreSQL, Redis, Qdrant |
-| AI | OpenAI, Gemini |
-| Workers | Celery, Redis |
+| AI | Provider-neutral AI foundation; OpenAI and Gemini integration deferred |
+| Workers | Celery and Redis configured for future work; background execution deferred |
 | Ops | Docker, Docker Compose, Nginx |
 
 ## Structure
@@ -113,7 +113,7 @@ Each service exposes:
 |---------|----------------|----------------|
 | gateway-service | 8000 | Auth, routing, validation, analytics & integration APIs |
 | meeting-service | 8001 | Meetings CRUD, uploads, transcripts, audio processing |
-| ai-service | 8002 | Agents, pipelines, LLM clients |
+| ai-service | 8002 | AI contracts, agents, and orchestration; no real provider or persistence integration yet |
 | search-service | 8003 | Embeddings, semantic retrieval, vector search |
 | worker-service | 8004 | Celery background jobs (HTTP health in Phase 1; worker process in Phase 7) |
 

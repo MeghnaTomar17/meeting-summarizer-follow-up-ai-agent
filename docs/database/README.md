@@ -14,9 +14,9 @@
 
 | Store      | Role                                      |
 |------------|-------------------------------------------|
-| PostgreSQL | Users, meetings, transcripts, AI output |
-| Redis      | Cache, sessions, Celery broker            |
-| Qdrant     | Semantic search over transcript chunks    |
+| PostgreSQL | Persisted users and Meeting domain data; AI-result persistence is deferred |
+| Redis      | Planned cache/session/Celery broker; not wired to AI processing |
+| Qdrant     | Planned semantic search over transcript chunks; not wired |
 
 ## PostgreSQL foundation and current domain schema (Phases 2.5–5)
 

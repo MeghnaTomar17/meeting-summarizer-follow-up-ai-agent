@@ -3,10 +3,12 @@
 ## Current elevator pitch
 
 MannerAI is a microservice-oriented meeting-intelligence platform. Through
-Phase 3.4, its implemented vertical slice is persistence for meetings and
-transcripts plus internal create/get meeting routes: PostgreSQL schema,
-SQLAlchemy models, async repositories, service use cases, and a thin FastAPI
-adapter. These are not public gateway APIs or an AI-processing workflow.
+Phase 6, the implemented platform includes authenticated Gateway and Meeting
+Service persistence flows plus a provider-independent AI Service foundation.
+The AI Service defines typed processing contracts, five transcript-grounded
+agents, a provider protocol, structured-output validation, and sequential
+orchestration. It does not yet connect to a real model provider or persist AI
+results. Earlier sections below remain study notes for their named phase.
 
 ## Architecture to explain
 
@@ -313,7 +315,7 @@ For every answer below, say what is implemented now and what remains planned.
 
 | Question | Expected answer | Likely follow-up / what it tests |
 |---|---|---|
-| What does the project do? | It is a meeting-intelligence platform. Phase 4 now includes authentication, self-service, Gateway-to-Meeting identity, and meeting ownership; summarization remains planned. | Scope honesty; system understanding. |
+| What does the project do? | It is a meeting-intelligence platform. The implemented system includes authenticated Gateway-to-Meeting persistence flows and a provider-independent AI Service foundation with five typed agents. Real provider execution, AI-result persistence mapping, and production pipeline integration remain planned. | Scope honesty; system understanding. |
 | Why PostgreSQL? | We need transactions, constraints, relationships, JSONB, and deliberate migrations for business data. | Relational-data trade-offs. |
 | What is an ORM / SQLAlchemy? | An ORM maps Python classes to tables; SQLAlchemy supplies the mapping and async database API. | Abstraction versus SQL knowledge. |
 | What is Alembic / a migration? | Alembic records ordered schema changes. A migration makes the same schema reproducible across databases. | Safe schema evolution. |
@@ -486,5 +488,76 @@ not sufficient: the real driver exception shape mattered.
   internal list retains deterministic `created_at DESC, id DESC` ordering.
 - MeetingInsight remains deferred because row shape, cardinality, and
   lifecycle/version semantics are not decided.
-- Phase 6 has not started. No AI generation, workers, embeddings, vector
-  search, or frontend implementation is part of Phase 5.
+- At the Phase 5 checkpoint, Phase 6 had not started. Phase 6 is now complete;
+  its AI Service foundation and current deferred boundaries are documented
+  below. Workers, embeddings, vector search, and frontend integration remain
+  outside the Phase 6 foundation.
+
+## Phase 6 — AI Service foundation study section
+
+### Architecture and boundaries
+
+The AI Service lives in `backend/ai-service/` and is independent of Meeting
+Service persistence. Its `ModelProvider` protocol isolates agents from vendor
+SDKs. The common `Agent` accepts `AgentInput`, builds a provider-neutral
+`ModelRequest`, and sends provider output through shared Pydantic structured
+validation. No real provider client is implemented.
+
+`ProcessingRequest` selects operations and carries the meeting/transcript IDs
+and optional context. `AIProcessingOrchestrator` explicitly maps each
+operation to one of five agents and executes sequentially in request order.
+`ProcessingResult` contains ordered typed `OperationResult` values and retains
+the caller's application-controlled IDs separately from model output. Its
+aggregate status is `completed`, `partially_failed`, or
+`failed`; one operation's failure does not erase successful outputs. Duplicate
+operations are deduplicated in the request while preserving their first
+occurrence, and the result contract independently enforces uniqueness.
+
+| Agent | What it returns | Boundary |
+|-------|-----------------|----------|
+| `SummaryAgent` | `content`, `key_topics` | No persistence identifiers |
+| `TaskAgent` | A possibly empty list of task candidates with title, optional description, transcript-level assignee name, and explicit calendar date | Does not resolve user IDs or lifecycle status |
+| `DecisionAgent` | Decision statement, optional context, participant names | Separates reached decisions from proposals or unresolved discussion |
+| `FollowUpAgent` | Subject, `body_html`, transcript-level recipient name and/or validated email | Does not send, schedule, persist, or resolve recipient IDs |
+| `InsightAgent` | Controlled category, title, description | No MeetingInsight persistence contract exists yet |
+
+AI output models are not ORM models or Meeting Service persistence schemas.
+Future application work must explicitly map validated candidate output to a
+domain use case before persistence. The AI Service does not access SQLAlchemy,
+repositories, database sessions, or user resolution.
+
+### Transcript source-data boundary
+
+Agents receive transcript content from their caller. They serialize selected
+transcript fields as deterministic JSON, preserving segment order and available
+speaker, timing, and language data. Prompts identify transcript content as
+untrusted source material rather than instructions and direct the model to use
+supported facts, avoid invented names/deadlines/recipients/decisions, and
+preserve uncertainty. Pydantic validates structure and types; it cannot prove
+that an output is semantically grounded. Prompt instructions do not guarantee
+complete prevention of prompt injection or hallucination.
+
+### Phase 6 hardening and verification
+
+Block 5 found that `ProcessingRequest` rejected duplicate operation execution
+by deduplicating its list, while a directly constructed `ProcessingResult`
+could still contain duplicate operations and outcomes. The result contract now
+rejects duplicate requested operations; `test_ai_orchestration.py` covers the
+regression.
+
+Final Phase 6 validation used the project `.venv`: AI tests **91 passed**;
+relevant Meeting/domain/Gateway/database regressions **68 run, 1 skipped**;
+full backend **350 run, 8 skipped**. The opt-in PostgreSQL integration modules
+had **7 skipped** because `RUN_POSTGRES_INTEGRATION` was unset. These skips are
+not PostgreSQL integration passes. `pip check` reported no broken requirements
+and `git diff --check` passed.
+
+### Deferred after the foundation
+
+- Real `ModelProvider` client and provider-specific integration.
+- Mapping AI outputs to Meeting Service persistence, including deciding the
+  MeetingInsight model shape and lifecycle.
+- Production pipeline and Gateway integration.
+- Background processing, Redis/Celery, semantic search, and frontend
+  integration.
+- Docker/infrastructure work and later Phase 7+ roadmap work.
