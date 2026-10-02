@@ -4,7 +4,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 
 ## Status
 
-**Current checkpoint: Phase 8 — background-processing application boundary.** Phase 8.3 carries a Gateway-issued trusted execution context with each job. The identity originates from the authenticated persisted user, is bound by the authenticated job factory, and is passed to the transcript provider, which delegates ownership enforcement to the existing `MeetingService`. AI processing and agents receive no authentication context. The in-process FIFO adapter is for development/tests only: jobs are not persisted and execution is not durable or exactly-once. Redis/Celery remain Phase 9, and AI results are not automatically persisted. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
+**Current checkpoint: Phase 8 complete — background-processing application boundary.** An authenticated Gateway context is bound to each job; the process-local FIFO adapter dispatches it through `MeetingService` ownership enforcement and the existing transcript normalization, AI orchestration, agents, and typed mapping path. AI processing and agents receive no authentication context, and AI results are not automatically persisted. This is an in-process integration only: jobs are not durable, and retries, delivery guarantees, crash recovery, locking, worker concurrency, and dead-letter handling are not implemented. Redis/Celery queue and worker integration is Phase 9. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -16,7 +16,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 | Backend | FastAPI (microservices) |
 | Data | PostgreSQL for current domain persistence; Redis and Qdrant are future integrations |
 | AI | Provider-neutral contracts and five agents; OpenAI adapter implemented; no public processing route |
-| Workers | Celery and Redis configured for future work; background execution deferred |
+| Workers | Phase 8 process-local executor; Redis/Celery queue and worker integration deferred to Phase 9 |
 | Ops | Docker, Docker Compose, Nginx |
 
 ## Structure

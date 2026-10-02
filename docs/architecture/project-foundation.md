@@ -830,15 +830,31 @@ carried in the context/job. Results are not automatically persisted.
 dispatches work with `run_next()` to the same job executor. It is not a
 distributed worker system. Jobs and outcomes are not durably stored; pending
 jobs are lost at process exit.
-There are no retries, distributed locking, durable idempotency, or exactly-once
-guarantees. Redis/Celery worker adapters are deferred to Phase 9.
+This process-local adapter does not guarantee durable jobs, retries,
+at-least-once or exactly-once delivery, crash recovery, distributed locking,
+queue persistence, worker concurrency, or dead-letter handling. Pending jobs
+disappear on process exit. AI results remain return values and are not
+automatically persisted. Redis/Celery worker adapters are deferred to Phase 9.
 
-Phase 9's queue payload must carry the authenticated user UUID with the meeting
-and transcript IDs and requested operations, and the worker must only accept
-messages from the trusted producer boundary. Client-supplied identity fields
-and credentials must never be treated as trusted. The current process-local
-context issuance marker is not a serialized credential; the Phase 9 boundary
-must establish producer authenticity before recreating a trusted context.
+The Phase 9 queue/worker contract must preserve these assumptions:
+
+1. Authenticate the trusted queue producer.
+2. Transport only an explicitly defined job envelope.
+3. Authenticate and validate each message before execution.
+4. Obtain or reconstruct a trusted execution context through a controlled
+   mechanism after message authentication.
+5. Never trust arbitrary `user_id` data from an untrusted producer or accept
+   client credentials as authorization authority.
+6. Invoke this same `AIProcessingJobExecutorService`.
+7. Preserve current job lifecycle and sanitized error semantics.
+8. Keep authentication and authorization out of AI services, orchestrators,
+   and agents.
+
+The context issuance marker is process-local and is not a serialized
+credential. Phase 9 must establish producer authenticity before creating a
+trusted worker context. It must not add the deferred delivery, persistence,
+recovery, locking, concurrency, or dead-letter guarantees without separately
+designing and validating them.
 
 ## Phase 3 persistence architecture (historical baseline)
 
@@ -1211,7 +1227,7 @@ meeting-summarizer-follow-up-ai-agent/
 - Automatic persistence invocation after AI processing; the processing service returns domain-ready inputs only
 - Applying and PostgreSQL-validating `0005_meeting_insights`
 - Semantic search and vector indexing
-- Background AI processing, Celery execution/retries/idempotency, and worker DB strategy
+- Redis/Celery distributed queue and worker integration, retry and delivery/idempotency policy, and worker DB strategy (Phase 9); Phase 8 process-local execution is implemented above
 - Redis client wiring (cache, sessions, broker)
 - Qdrant vector store operations
 - Production AI pipeline/Gateway integration

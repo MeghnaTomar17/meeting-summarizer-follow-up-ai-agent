@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — current AI application boundary after Phase 7.6.
+> MannerAI Meetings Platform — current AI and process-local job boundary after Phase 8.
 
 **Entry point:** For the consolidated current reference and Phase 7 checkpoint, see [project-foundation.md](./project-foundation.md).
 
@@ -109,20 +109,30 @@ client-supplied user IDs or credentials as authorization authority.
 
 `InProcessJobSubmissionPort` is a FIFO `asyncio.Queue` that accepts a job and
 returns a queued receipt; tests/development explicitly dispatch one job with
-`run_next()`, which passes it to the same executor. This is process-local only:
-queued jobs disappear on process exit, state is not durable, retries/locking/
-deduplication are absent, and exactly-once execution is not guaranteed. The
-existing direct `AIProcessingService` call remains available. Redis/Celery
-adapters and worker execution belong to Phase 9; no public job endpoint is
+`run_next()`, which passes it to the same executor. The end-to-end integration
+path uses this adapter, the actual MeetingService ownership check, the existing
+Phase 7 normalization and `AIProcessingService` path, and a deterministic test
+provider. Results stay in the returned job and are not persisted.
+
+This adapter is process-local only. It does not guarantee durable jobs, retries,
+at-least-once or exactly-once delivery, crash recovery, distributed locking,
+queue persistence, worker concurrency, or dead-letter handling. Pending jobs
+disappear on process exit. The adapter does not add concurrency or retry
+semantics. The existing direct `AIProcessingService` call remains available;
+Redis/Celery adapters belong to Phase 9, and no public job endpoint is
 introduced here.
 
-For Phase 9, the queue payload will need the authenticated user UUID together
-with the job's meeting/transcript IDs and requested operations. It must not
-contain access/refresh tokens, passwords, provider credentials, or a principal
-selected from client data. The worker must establish that the payload came
-from the trusted submission boundary before creating its in-process execution
-context; the current context issuance marker is intentionally not a serialized
-credential.
+Phase 9 must authenticate the trusted queue producer and transport only an
+explicitly defined job envelope. A worker must authenticate and validate each
+message before execution, then obtain or reconstruct a trusted execution
+context through a controlled mechanism. It must never trust arbitrary
+`user_id` data from an untrusted producer or accept access/refresh tokens,
+passwords, or provider credentials in the envelope. The worker must invoke this
+same `AIProcessingJobExecutorService` and preserve its lifecycle and sanitized
+error semantics. Authentication and authorization logic must remain outside
+the AI service, orchestrator, and agents. The current context issuance marker
+is intentionally not a serialized credential; producer authenticity must be
+established before the worker creates a context.
 
 ## Microservices
 
@@ -132,7 +142,7 @@ credential.
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
 | ai-service | AIProcessingService, transcript normalization, five agents, injected provider abstraction/OpenAI adapter, orchestration, typed validation and domain mapping; no database or persistence side effects |
 | search-service | Health service; chunking, embeddings, and Qdrant retrieval remain deferred |
-| worker-service | Health service; Celery background execution remains deferred |
+| worker-service | Health service; distributed Celery worker execution remains deferred to Phase 9 |
 
 ## Data stores
 
@@ -238,7 +248,7 @@ For the detailed, current reference see [project-foundation.md](./project-founda
 - Sequence diagrams for upload → process → index flow
 - Organization membership and authorization for organization-wide listing
 - Public AI processing API and production Gateway integration
-- Background processing, Redis/Celery workers, retries, and idempotency
+- Redis/Celery queue and worker integration, retry policy, and delivery/idempotency guarantees (Phase 9)
 - Semantic search, Qdrant/RAG, analytics, and frontend AI workflow
 - Applying and PostgreSQL-validating migration `0005_meeting_insights`; it is defined but unapplied
 - Docker/infrastructure work, Gmail integration, and later roadmap phases

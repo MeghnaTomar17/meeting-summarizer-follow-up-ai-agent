@@ -9,7 +9,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -53,14 +53,17 @@ class DeterministicModelProvider:
             content = "{not valid json"
         else:
             content = self.responses[output_name]
-        contracts = importlib.import_module("app.contracts")
-        return contracts.ModelResponse(content=content)
+        response_type = getattr(self, "response_type", None)
+        if response_type is None:
+            response_type = importlib.import_module("app.contracts").ModelResponse
+        return response_type(content=content)
 
 
 class AIApplicationIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         _prepare_imports()
         self.contracts = importlib.import_module("app.contracts")
+        self.jobs = importlib.import_module("app.background_processing")
         self.results = importlib.import_module("app.processing_results")
         self.service_module = importlib.import_module("app.processing_service")
         self.orchestrator_module = importlib.import_module("agents.orchestrator")
@@ -133,6 +136,169 @@ class AIApplicationIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def _service(self, provider):
         orchestrator = self.orchestrator_module.AIProcessingOrchestrator(provider)
         return self.service_module.AIProcessingService(orchestrator)
+
+    def _background_application(self, provider):
+        """Connect the real AI path to MeetingService without service-package collisions."""
+        provider.response_type = self.contracts.ModelResponse
+        ai_service = self._service(provider)
+
+        # Each backend service has an ``app`` package. Keep the already-imported AI
+        # objects alive, then load MeetingService and its provider from their own root.
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        for service in ("gateway-service", "meeting-service", "ai-service"):
+            root = str(BACKEND_ROOT / service)
+            while root in sys.path:
+                sys.path.remove(root)
+        sys.path.insert(0, str(BACKEND_ROOT / "meeting-service"))
+
+        meeting_service_module = importlib.import_module("app.services.meeting_service")
+        transcript_provider_module = importlib.import_module(
+            "app.services.transcript_input_provider"
+        )
+        models = importlib.import_module("shared.database.models.meeting")
+        transcript_models = importlib.import_module("shared.database.models.transcript")
+        now = datetime(2026, 10, 2, tzinfo=timezone.utc)
+        meeting = models.Meeting(
+            id=MEETING_ID,
+            organization_id=UUID(int=55),
+            created_by=UUID("10000000-0000-0000-0000-000000000001"),
+            title="Launch planning",
+            status=models.MeetingStatus.PENDING,
+        )
+        meeting.created_at = now
+        meeting.updated_at = now
+        transcript = transcript_models.Transcript(
+            id=TRANSCRIPT_ID,
+            meeting_id=MEETING_ID,
+            language="en",
+            segments=[
+                {"index": 1, "speaker": "Meghna", "text": "Ravi will send the revised plan by Thursday.", "start_ms": 5000, "end_ms": 11000},
+                {"index": 0, "speaker": "Ravi", "text": "We need to finish the launch plan.", "start_ms": 0, "end_ms": 4000},
+            ],
+        )
+        transcript.created_at = now
+        transcript.updated_at = now
+        meeting_repository = MagicMock()
+        meeting_repository.get_by_id = AsyncMock(return_value=meeting)
+        transcript_repository = MagicMock()
+        transcript_repository.get_by_meeting_id = AsyncMock(return_value=transcript)
+        session = MagicMock()
+        service = meeting_service_module.MeetingService(
+            session, meeting_repository, transcript_repository
+        )
+        transcript_provider = transcript_provider_module.MeetingServiceTranscriptInputProvider(service)
+        return ai_service, service, transcript_provider, session, meeting_repository, transcript_repository
+
+    def _trusted_context(self, user_id=None):
+        context_module = importlib.import_module("shared.security.execution_context")
+        return context_module.TrustedExecutionContext._issue_from_authenticated_user_id(
+            user_id or UUID("10000000-0000-0000-0000-000000000001")
+        )
+
+    def _background_job(self, operations, context):
+        return self.jobs.AIProcessingJob.from_authenticated_context(
+            meeting_id=MEETING_ID,
+            transcript_id=TRANSCRIPT_ID,
+            requested_operations=operations,
+            execution_context=context,
+            context={"project": "launch"},
+        )
+
+    async def test_phase8_fifo_to_typed_ai_result_through_meeting_ownership_path(self):
+        provider = self._provider()
+        ai_service, _, transcript_provider, session, meetings, transcripts = self._background_application(provider)
+        ai_service.process = AsyncMock(wraps=ai_service.process)
+        context = self._trusted_context()
+        job = self._background_job(["tasks", "summary"], context)
+        executor = self.jobs.AIProcessingJobExecutorService(ai_service, transcript_provider)
+        submission = self.jobs.InProcessJobSubmissionPort(executor)
+
+        receipt = await submission.submit(job)
+        finished = await submission.run_next()
+
+        self.assertEqual(receipt.job_id, job.job_id)
+        self.assertEqual(finished.job_id, job.job_id)
+        self.assertEqual(finished.meeting_id, MEETING_ID)
+        self.assertEqual(finished.transcript_id, TRANSCRIPT_ID)
+        self.assertEqual(finished.execution_context_id, context.context_id)
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.COMPLETED)
+        ai_service.process.assert_awaited_once()
+        self.assertEqual([item.operation.value for item in finished.processing_result.results], ["tasks", "summary"])
+        self.assertEqual(provider.requested_models, ["TaskAgentOutput", "SummaryAgentOutput"])
+        self.assertEqual(finished.processing_result.results[0].output.items[0].title, "Send the revised launch plan")
+        self.assertEqual(finished.processing_result.results[1].output.content, "The team confirmed the launch plan and identified a vendor timing risk.")
+
+        normalized = json.loads(provider.requests[0].input_text.split("\n", 1)[1])
+        self.assertEqual(normalized["transcript_id"], str(TRANSCRIPT_ID))
+        self.assertEqual(normalized["language"], "en")
+        self.assertEqual([segment["index"] for segment in normalized["segments"]], [0, 1])
+        self.assertEqual(normalized["segments"][0]["speaker"], "Ravi")
+        self.assertEqual(normalized["segments"][0]["start_ms"], 0)
+        meetings.get_by_id.assert_awaited_once_with(MEETING_ID)
+        transcripts.get_by_meeting_id.assert_awaited_once_with(MEETING_ID)
+        session.commit.assert_not_called()
+        self.assertEqual(submission.pending_count, 0)
+        with self.assertRaises(self.jobs.NoQueuedJobError):
+            await submission.run_next()
+
+    async def test_phase8_real_ai_partial_failure_keeps_success_and_job_status(self):
+        provider_errors = importlib.import_module("llm.errors")
+        provider = self._provider(
+            failures={"TaskAgentOutput": provider_errors.ModelTimeoutError()}
+        )
+        ai_service, _, transcript_provider, session, _, _ = self._background_application(provider)
+        job = self._background_job(["summary", "tasks"], self._trusted_context())
+        executor = self.jobs.AIProcessingJobExecutorService(ai_service, transcript_provider)
+        submission = self.jobs.InProcessJobSubmissionPort(executor)
+        await submission.submit(job)
+
+        finished = await submission.run_next()
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.PARTIALLY_FAILED)
+        self.assertEqual(finished.processing_result.status, self.contracts.ProcessingStatus.PARTIALLY_FAILED)
+        self.assertEqual([item.status.value for item in finished.processing_result.results], ["completed", "failed"])
+        self.assertEqual(finished.processing_result.results[0].output.content, "The team confirmed the launch plan and identified a vendor timing risk.")
+        self.assertEqual(finished.processing_result.results[1].error.code.value, "provider_timeout")
+        self.assertIsNone(finished.failure)
+        session.commit.assert_not_called()
+
+    async def test_phase8_real_ai_total_failure_is_sanitized_and_unpersisted(self):
+        provider_errors = importlib.import_module("llm.errors")
+        provider = self._provider(failures={
+            "SummaryAgentOutput": provider_errors.ModelTimeoutError(),
+            "TaskAgentOutput": provider_errors.ModelTimeoutError(),
+        })
+        ai_service, _, transcript_provider, session, _, _ = self._background_application(provider)
+        job = self._background_job(["summary", "tasks"], self._trusted_context())
+        executor = self.jobs.AIProcessingJobExecutorService(ai_service, transcript_provider)
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.AI_PROCESSING_FAILED)
+        self.assertEqual(finished.processing_result.status, self.contracts.ProcessingStatus.FAILED)
+        self.assertTrue(all(item.output is None for item in finished.processing_result.results))
+        self.assertNotIn("timeout", finished.failure.message.lower())
+        self.assertEqual(len(provider.requests), 2)
+        session.commit.assert_not_called()
+
+    async def test_phase8_wrong_owner_is_rejected_before_real_ai_provider(self):
+        provider = self._provider()
+        ai_service, _, transcript_provider, session, meetings, transcripts = self._background_application(provider)
+        job = self._background_job(
+            ["summary"], self._trusted_context(UUID("20000000-0000-0000-0000-000000000002"))
+        )
+        executor = self.jobs.AIProcessingJobExecutorService(ai_service, transcript_provider)
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.EXECUTION_FAILED)
+        self.assertNotIn("owner", finished.failure.message.lower())
+        meetings.get_by_id.assert_awaited_once_with(MEETING_ID)
+        transcripts.get_by_meeting_id.assert_not_awaited()
+        self.assertEqual(provider.requests, [])
+        session.commit.assert_not_called()
 
     async def test_real_service_orchestrator_agents_provider_and_mappers_cover_all_operations(self):
         provider = self._provider()
@@ -253,6 +419,9 @@ class AIApplicationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         # The service/orchestrator path should remain loadable without importing
         # persistence modules. Guard imports in a subprocess-like fresh module set.
         provider = self._provider()
+        for module_name in list(sys.modules):
+            if module_name == "shared.database" or module_name.startswith("shared.database."):
+                del sys.modules[module_name]
         with patch.dict(sys.modules, {"shared.database": None, "sqlalchemy": None}):
             result = await self._service(provider).process(
                 self._request(["summary", "insights"]), self._transcript()

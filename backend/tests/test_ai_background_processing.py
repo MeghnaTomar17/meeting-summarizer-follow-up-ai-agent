@@ -176,12 +176,20 @@ class AIBackgroundProcessingTests(unittest.IsolatedAsyncioTestCase):
         running = job.start(at=instant)
         completed = running.finish(self._result(job), at=instant)
         failed_from_queued = job.fail(self.jobs.JobFailureCode.INVALID_INPUT, at=instant)
+        failed_from_running = running.fail(
+            self.jobs.JobFailureCode.EXECUTION_FAILED, at=instant
+        )
 
         self.assertEqual(running.status, self.jobs.AIProcessingJobStatus.RUNNING)
         self.assertEqual(completed.status, self.jobs.AIProcessingJobStatus.COMPLETED)
         self.assertEqual(completed.job_id, job.job_id)
         self.assertEqual(failed_from_queued.status, self.jobs.AIProcessingJobStatus.FAILED)
         self.assertEqual(failed_from_queued.failure.code, self.jobs.JobFailureCode.INVALID_INPUT)
+        self.assertEqual(failed_from_running.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(
+            failed_from_running.failure.code,
+            self.jobs.JobFailureCode.EXECUTION_FAILED,
+        )
         with self.assertRaises(self.jobs.InvalidJobTransitionError):
             job.finish(self._result(job), at=instant)
         with self.assertRaises(self.jobs.InvalidJobTransitionError):
