@@ -1,8 +1,12 @@
 # Engineering Problems and Solutions
 
-This is a factual record of meaningful issues encountered through Phase 6.
+This is a factual record of meaningful issues encountered through Phase 7.6.
 It complements the current architecture documents; it does not turn deferred
 design choices into completed work.
+
+Phase 7.6 added deterministic integration coverage and exposed no production
+defect requiring a new problem entry. Earlier issues remain under their
+original checkpoint numbers.
 
 ## PS-001 — Test framework assumption
 

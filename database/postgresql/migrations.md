@@ -74,11 +74,13 @@ it has not been run and is pending on that database.
 and follow-ups with their indexes, foreign keys, and native status enums. Its
 downgrade drops dependent tables/indexes before removing the enums.
 
-`0005_meeting_insights` creates one immutable row per insight candidate, with a
-shared native category enum, Meeting cascade foreign key, and a meeting-scope
-index. Its downgrade drops the index and table before the enum. No migration has
-been applied as part of Phase 7.4; PostgreSQL integration remains pending until
-the revision is deliberately applied to a suitable test database.
+`0005_meeting_insights` is an additive, reversible migration that creates one
+immutable row per insight candidate, with a shared native category enum,
+Meeting cascade foreign key, and a meeting-scope index. Its downgrade drops
+the index and table before the enum. It is defined in the repository but is
+currently **unapplied** and has not been validated against PostgreSQL. No
+`alembic upgrade head` for revision 0005 has been run; PostgreSQL integration
+remains pending until it is deliberately applied to a suitable test database.
 
 Meeting insight rows have no run/version/replacement semantics in this phase;
 repeated or duplicate-looking findings are preserved. Processing status,

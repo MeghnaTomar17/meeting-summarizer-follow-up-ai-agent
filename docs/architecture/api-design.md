@@ -12,6 +12,13 @@
 
 The **gateway** is the public API compatibility boundary. Internal service APIs evolve with coordinated deploys and are not directly exposed to clients.
 
+Phase 7 did not introduce a public AI processing endpoint. `AIProcessingService`
+is an application-layer contract that accepts a `ProcessingRequest` and a
+caller-supplied transcript, then returns typed domain-ready inputs. Existing
+Gateway and Meeting domain APIs remain separate; decisions about exposing AI
+processing, jobs, and persistence invocation through public or internal APIs
+are deferred to later integration phases.
+
 ## Versioning
 
 ### Public API (`v1`)

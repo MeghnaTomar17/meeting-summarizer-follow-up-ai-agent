@@ -1,12 +1,51 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — AI processing boundary through Phase 7.5.
+> MannerAI Meetings Platform — current AI application boundary after Phase 7.6.
 
-**Entry point:** For the consolidated current reference and Phase 6 checkpoint, see [project-foundation.md](./project-foundation.md).
+**Entry point:** For the consolidated current reference and Phase 7 checkpoint, see [project-foundation.md](./project-foundation.md).
 
 ## System context
 
-The platform persists meetings, transcripts, and meeting results behind a Gateway and Meeting Service. The AI Service accepts a trusted processing request and caller-loaded transcript, normalizes transcript data, invokes the existing orchestrator, and returns typed domain-ready outputs with operation-level failures. The processing boundary does not load records or persist results; its caller decides when to invoke domain services. The OpenAI provider adapter exists, while public processing routes, background execution, semantic indexing, and frontend workflows remain deferred.
+The platform persists meetings, transcripts, and domain results behind a Gateway and Meeting Service. Phase 7 implements and tests the AI application path from a caller-supplied transcript through normalization, orchestration, five agents, an injected provider, typed output validation, and domain mapping. `AIProcessingService` returns trusted, domain-ready inputs with operation-level failures; it does not retrieve transcripts from storage or persist results. The OpenAI adapter is one `ModelProvider` implementation. Deterministic integration tests use a test-only provider and make no network calls.
+
+## Current AI processing boundary (Phase 7)
+
+```text
+Caller supplies ProcessingRequest + trusted TranscriptInDB
+                         ↓
+              transcript normalization
+                         ↓
+                    AgentInput
+                         ↓
+                AIProcessingService
+                         ↓
+              AIProcessingOrchestrator
+                         ↓
+       Summary / Task / Decision / FollowUp / Insight agents
+                         ↓
+               injected ModelProvider
+                         ↓
+          structured JSON → typed Pydantic output
+                         ↓
+                 domain mapping
+                         ↓
+             domain-ready input DTOs
+                         ↓
+       caller-owned application/persistence decision
+```
+
+Agents receive application input and do not query the database. Provider SDKs
+remain behind the `ModelProvider` protocol; OpenAI is a concrete adapter, while
+tests inject deterministic structured responses. The application supplies
+meeting/transcript identity, and model output cannot replace it. Structured
+validation checks shape and types, not whether a claim is semantically true.
+Successful mappings are not automatically written to PostgreSQL. MeetingInsight
+has persistence models and a repository, but no automatic AI-to-database path.
+
+The implemented application path is synchronous orchestration in-process; it
+does not mean HTTP requests are queued or processed in the background. Redis,
+Celery, retries, job/idempotency contracts, public AI endpoints, and frontend
+workflow integration remain future work.
 
 ## Microservices
 
@@ -14,13 +53,13 @@ The platform persists meetings, transcripts, and meeting results behind a Gatewa
 |---------|----------------|
 | gateway-service | Auth, routing, validation, public API |
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
-| ai-service | AIProcessingService, transcript normalization, five agents, OpenAI provider adapter, deterministic orchestration, and typed domain mapping; no database or persistence side effects |
+| ai-service | AIProcessingService, transcript normalization, five agents, injected provider abstraction/OpenAI adapter, orchestration, typed validation and domain mapping; no database or persistence side effects |
 | search-service | Health service; chunking, embeddings, and Qdrant retrieval remain deferred |
 | worker-service | Health service; Celery background execution remains deferred |
 
 ## Data stores
 
-- **PostgreSQL** — users, refresh sessions, meetings, transcripts, and meeting results
+- **PostgreSQL** — users, refresh sessions, meetings, transcripts, and Phase 5 meeting results; the MeetingInsight schema is defined but awaits migration 0005
 - **Redis** — configured for future cache/broker use; not wired to AI processing
 - **Qdrant** — planned vector index; retrieval integration is deferred
 
@@ -56,7 +95,7 @@ The platform persists meetings, transcripts, and meeting results behind a Gatewa
 - Async SQLAlchemy 2.x + asyncpg (see `docs/architecture/database.md`)
 - Shared infrastructure in `backend/shared/database/`
 - Alembic migrations at `backend/migrations/`
-- gateway-service owns user and refresh-session persistence; meeting-service owns meeting, transcript, and result persistence, including MeetingInsight rows
+- gateway-service owns user and refresh-session persistence; meeting-service owns meeting, transcript, and existing result persistence. MeetingInsight ORM/schema/repository support is defined, but migration 0005 remains unapplied.
 
 ## Public authentication boundary
 
@@ -117,10 +156,12 @@ requires persisted organization membership and an authorization policy.
 
 For the detailed, current reference see [project-foundation.md](./project-foundation.md).
 
-## Remaining work
+## Deferred work
 
 - Sequence diagrams for upload → process → index flow
 - Organization membership and authorization for organization-wide listing
-- Public AI processing API and persistence invocation policy
-- Production pipeline/Gateway integration, background processing, Redis/Celery, semantic search, and frontend integration
-- Docker/infrastructure work and later Phase 7+ roadmap work
+- Public AI processing API and production Gateway integration
+- Background processing, Redis/Celery workers, retries, and idempotency
+- Semantic search, Qdrant/RAG, analytics, and frontend AI workflow
+- Applying and PostgreSQL-validating migration `0005_meeting_insights`; it is defined but unapplied
+- Docker/infrastructure work, Gmail integration, and later roadmap phases

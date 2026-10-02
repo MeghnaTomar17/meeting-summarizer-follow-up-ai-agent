@@ -3,12 +3,14 @@
 ## Current elevator pitch
 
 MannerAI is a microservice-oriented meeting-intelligence platform. Through
-Phase 6, the implemented platform includes authenticated Gateway and Meeting
-Service persistence flows plus a provider-independent AI Service foundation.
-The AI Service defines typed processing contracts, five transcript-grounded
-agents, a provider protocol, structured-output validation, and sequential
-orchestration. It does not yet connect to a real model provider or persist AI
-results. Earlier sections below remain study notes for their named phase.
+Phase 7, the implemented platform includes authenticated Gateway and Meeting
+Service persistence flows plus an AI application path that normalizes a supplied
+transcript, runs five typed agents through an injected provider, validates
+structured outputs, and maps successes into domain-ready inputs. The OpenAI
+adapter exists, but AIProcessingService does not retrieve or persist records.
+Public AI APIs, background execution, and production pipeline integration
+remain deferred. Earlier sections below remain study notes for their named
+phase/checkpoint.
 
 ## Architecture to explain
 
@@ -315,7 +317,7 @@ For every answer below, say what is implemented now and what remains planned.
 
 | Question | Expected answer | Likely follow-up / what it tests |
 |---|---|---|
-| What does the project do? | It is a meeting-intelligence platform. The implemented system includes authenticated Gateway-to-Meeting persistence flows and a provider-independent AI Service foundation with five typed agents. Real provider execution, AI-result persistence mapping, and production pipeline integration remain planned. | Scope honesty; system understanding. |
+| What does the project do? | It is a meeting-intelligence platform. The implemented system includes authenticated Gateway-to-Meeting persistence flows and a Phase 7 AI application boundary with five typed agents, OpenAI adapter, validation, and domain mapping. Public processing, automatic persistence, and production pipeline integration remain deferred. | Scope honesty; system understanding. |
 | Why PostgreSQL? | We need transactions, constraints, relationships, JSONB, and deliberate migrations for business data. | Relational-data trade-offs. |
 | What is an ORM / SQLAlchemy? | An ORM maps Python classes to tables; SQLAlchemy supplies the mapping and async database API. | Abstraction versus SQL knowledge. |
 | What is Alembic / a migration? | Alembic records ordered schema changes. A migration makes the same schema reproducible across databases. | Safe schema evolution. |
@@ -486,14 +488,16 @@ not sufficient: the real driver exception shape mattered.
   A client-supplied `organization_id` alone is not authorization.
 - No Meeting search fields or client-selected sort keys are defined; the
   internal list retains deterministic `created_at DESC, id DESC` ordering.
-- MeetingInsight remains deferred because row shape, cardinality, and
-  lifecycle/version semantics are not decided.
+- At the Phase 5 checkpoint, MeetingInsight was deferred because row shape,
+  cardinality, and lifecycle/version semantics were not decided. Phase 7 later
+  defined its immutable snapshot shape; version/replacement policy remains
+  deferred.
 - At the Phase 5 checkpoint, Phase 6 had not started. Phase 6 is now complete;
   its AI Service foundation and current deferred boundaries are documented
   below. Workers, embeddings, vector search, and frontend integration remain
   outside the Phase 6 foundation.
 
-## Phase 6 — AI Service foundation study section
+## Phase 6 — AI Service foundation study section (historical checkpoint)
 
 ### Architecture and boundaries
 
@@ -501,7 +505,8 @@ The AI Service lives in `backend/ai-service/` and is independent of Meeting
 Service persistence. Its `ModelProvider` protocol isolates agents from vendor
 SDKs. The common `Agent` accepts `AgentInput`, builds a provider-neutral
 `ModelRequest`, and sends provider output through shared Pydantic structured
-validation. No real provider client is implemented.
+validation. At the Phase 6 checkpoint no concrete provider client was
+implemented; Phase 7 added the OpenAI adapter.
 
 `ProcessingRequest` selects operations and carries the meeting/transcript IDs
 and optional context. `AIProcessingOrchestrator` explicitly maps each
@@ -519,7 +524,7 @@ occurrence, and the result contract independently enforces uniqueness.
 | `TaskAgent` | A possibly empty list of task candidates with title, optional description, transcript-level assignee name, and explicit calendar date | Does not resolve user IDs or lifecycle status |
 | `DecisionAgent` | Decision statement, optional context, participant names | Separates reached decisions from proposals or unresolved discussion |
 | `FollowUpAgent` | Subject, `body_html`, transcript-level recipient name and/or validated email | Does not send, schedule, persist, or resolve recipient IDs |
-| `InsightAgent` | Controlled category, title, description | No MeetingInsight persistence contract exists yet |
+| `InsightAgent` | Controlled category, title, description | At the Phase 6 checkpoint no MeetingInsight persistence contract existed; Phase 7 added the domain/ORM snapshot contract. |
 
 AI output models are not ORM models or Meeting Service persistence schemas.
 Future application work must explicitly map validated candidate output to a
@@ -552,12 +557,96 @@ had **7 skipped** because `RUN_POSTGRES_INTEGRATION` was unset. These skips are
 not PostgreSQL integration passes. `pip check` reported no broken requirements
 and `git diff --check` passed.
 
-### Deferred after the foundation
+### Deferred after the Phase 6 checkpoint (historical)
 
-- Real `ModelProvider` client and provider-specific integration.
-- Mapping AI outputs to Meeting Service persistence, including deciding the
-  MeetingInsight model shape and lifecycle.
+- Concrete provider adapter, AI-to-domain mapping, and MeetingInsight schema
+  were deferred at this checkpoint and added in Phase 7.
 - Production pipeline and Gateway integration.
 - Background processing, Redis/Celery, semantic search, and frontend
   integration.
-- Docker/infrastructure work and later Phase 7+ roadmap work.
+- Docker/infrastructure work and later roadmap phases.
+
+## Phase 7 — AI Meeting Intelligence Integration study section
+
+### Application flow and ownership
+
+```text
+ProcessingRequest + caller-loaded TranscriptInDB
+  → transcript normalization → AgentInput
+  → AIProcessingService → AIProcessingOrchestrator
+  → five agents → injected ModelProvider
+  → structured JSON/Pydantic validation → typed AI outputs
+  → explicit domain mapping → domain-ready input DTOs
+  → caller-owned persistence decision
+```
+
+`AIProcessingService` checks transcript, meeting, and orchestrator result
+identities; preserves requested-operation order; maps each successful output;
+and returns safe operation-level outcomes. It does not retrieve the transcript,
+create an `AsyncSession`, call a repository, or commit. A future application
+caller must explicitly choose whether to pass domain-ready inputs to Meeting
+Service persistence.
+
+### Engineering decisions to explain
+
+| Decision | Project-specific reason | Interview explanation |
+|----------|-------------------------|-----------------------|
+| `ModelProvider` abstraction | Agents depend on `ModelRequest`/`ModelResponse`, not OpenAI SDK types. OpenAI is an injected adapter; the tests inject a deterministic test-only provider. | Provider selection, credentials, SDK behavior, and provider failures stay outside agent contracts. The integration suite needs no credentials or network. |
+| Agents do not access PostgreSQL | Agents receive `AgentInput` built from the caller's transcript and optional context. | This keeps model execution independently testable and prevents an agent from bypassing Meeting Service ownership, authorization, and transaction rules. |
+| Model output excludes persistence IDs | AI output schemas contain candidate content, not `meeting_id`, row UUIDs, timestamps, or ORM state. | The application—not generated text—owns resource identity and persistence lifecycle. |
+| Trusted identity comes from the application | `ProcessingRequest` and `TranscriptInDB` carry meeting/transcript IDs; normalization, orchestrator, and service verify that they agree. Mappers use the trusted request meeting ID. | Model-generated identity is never accepted as authority. |
+| Mapping is separate from generation | Typed agent outputs map through explicit functions into existing `SummaryBase`, `TaskBase`, `DecisionBase`, `FollowupBase`, and `MeetingInsightBase` contracts. | Provider schemas and persistence/domain contracts evolve for different reasons; mapping reports when safe representation is impossible. |
+| MeetingInsight is relational | Insights need meeting-scoped storage, controlled categories, foreign-key ownership, deterministic listing, and Meeting deletion behavior. | It is a first-class candidate snapshot, not a vector-search record or an unstructured field on the summary. |
+| No semantic deduplication yet | No run/replacement policy or uniqueness definition exists; same-looking candidates can have different meaning over time. | Retain candidates until a product policy defines identity, confidence, and replacement semantics. |
+| No automatic commit | AIProcessingService has no persistence dependency and returns DTOs only. | The caller owns domain-service invocation and transaction policy; model generation must not silently write rows. |
+
+### Typed results, failures, and limitations
+
+The orchestrator runs requested operations sequentially in request order.
+Duplicate operations are removed at request construction while preserving
+first occurrence. Each operation is completed with a typed output or failed
+with a sanitized code/message. The aggregate status is `completed` if all
+succeed, `partially_failed` if some succeed, and `failed` if none succeed.
+Mapping failures affect only their operation, preserving other successes.
+
+- Task candidates may include calendar dates, but Task persistence currently
+  accepts `datetime` for `due_at`; the mapper refuses to guess time/timezone.
+  An `assignee_name` is not converted into a User UUID.
+- Follow-up recipient names without email addresses cannot map to the current
+  email-only domain contract; no address is inferred.
+- `InsightCategory` is a controlled enum, but typed validation cannot prove
+  semantic grounding. Prompts and schemas reduce risk without guaranteeing
+  truthfulness.
+- MeetingInsight is an immutable snapshot (`id`, `meeting_id`, `category`,
+  `title`, `description`, `created_at`) with no update/status/version/run ID or
+  provider metadata. Similar insights may coexist; no semantic deduplication
+  or replacement exists.
+- Migration `0005_meeting_insights` is defined and reversible but unapplied and
+  not PostgreSQL-validated. Repository/schema existence does not mean the
+  table is present in the current database.
+
+### What Phase 7.6 integration tests prove
+
+The test-only provider supplies predetermined JSON and can simulate provider
+failure or malformed output. Tests run the real
+`AIProcessingService → AIProcessingOrchestrator → agents → structured-output
+validation → domain mapping` path. They cover all five operations, empty
+collections, partial failures, malformed output, ordering/deduplication,
+transcript ordering/speakers/timestamps/language, trusted identity, unsafe
+mapping, and absence of persistence imports/side effects. They do not validate
+live OpenAI behavior, PostgreSQL migration 0005, semantic accuracy, retries,
+or background execution.
+
+Phase 7 checkpoint verification: **422 backend tests run, 8 skipped; all
+non-skipped tests passed**;
+AI suite **153 passed**; `pip check` and `git diff --check` were clean. The
+skips are not evidence that migration 0005 or MeetingInsight persistence was
+tested against PostgreSQL.
+
+### Deferred after Phase 7
+
+Public AI processing/job APIs, Gateway/production pipeline integration,
+automatic persistence invocation, background workers/retries/idempotency,
+applying and PostgreSQL-validating migration 0005, insight deduplication,
+Qdrant/RAG/search, frontend AI workflow, Gmail, and deployment remain future
+work.

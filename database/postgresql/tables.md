@@ -6,13 +6,14 @@
 
 ## Implemented schema
 
-The migration chain implements `users`, `refresh_sessions`, `meetings`,
+The migration chain defines `users`, `refresh_sessions`, `meetings`,
 `transcripts`, `summaries`, `tasks`, `decisions`, `followups`, and
 `meeting_insights`, plus the `meeting_status`, `task_status`, `followup_status`,
-and `meeting_insight_category` enums. The configured local database was
-verified at `0004_meeting_domain_results (head)` after the Phase 5
-synchronization. Revision `0005_meeting_insights` is now the code head and has
-not been applied; that database therefore has the new insight schema pending.
+and `meeting_insight_category` enums. The configured local database was last
+verified at `0004_meeting_domain_results (head)`. Revision
+`0005_meeting_insights` is the code head but has not been applied or validated
+against PostgreSQL; the `meeting_insights` table is therefore a defined schema,
+not a claim about the current database contents.
 
 ### meeting_status enum
 
@@ -57,7 +58,7 @@ contract supplies the same values to AI validation and ORM persistence.
 - **Key columns:** `id` (UUID PK), `meeting_id` (FK, unique), `language`, `segments` (JSONB), `created_at`, `updated_at`.
 - **TODO:** Consider `transcript_segments` child table for large meetings.
 
-## Implemented result tables (Phase 5)
+## Phase 5 result tables
 
 Revision `0004_meeting_domain_results` is applied to the configured development
 database and was validated by PostgreSQL integration tests.
@@ -86,12 +87,19 @@ database and was validated by PostgreSQL integration tests.
 - **Key columns:** `id` (UUID PK), `meeting_id` (FK, cascade delete), `subject`, `body_html`, `recipients` (JSONB email list), `status` (`followup_status`, default `draft`), nullable `scheduled_at` and `sent_at`, `created_at`.
 - **Cardinality:** A meeting has zero or many follow-ups; no unique draft-per-meeting constraint is imposed.
 
+## Defined but unapplied table (Phase 7.4)
+
+Revision `0005_meeting_insights` adds the following table definition. It is not
+present in the currently verified database because the migration is unapplied.
+
 ### meeting_insights
 
-- **Purpose:** Persist one qualitative Insight Agent candidate per row.
-- **Key columns:** `id` (UUID PK), `meeting_id` (FK, cascade delete), `category` (`meeting_insight_category`), `title`, `description`, and `created_at`.
-- **Cardinality/lifecycle:** A meeting has zero or many insights. Rows are immutable snapshots with no update/status/version fields. Regeneration may add another row; replacement and semantic deduplication are deferred to a later processing policy.
-- **Constraints:** No uniqueness constraint on category/title; similar findings from separate runs remain separate. Meeting ownership is inherited through `meeting_id`.
+- **Purpose:** Persist one qualitative Insight Agent candidate per row when a caller explicitly invokes the persistence boundary.
+- **Columns:** `id UUID NOT NULL` (primary key, supplied by `UUIDPrimaryKeyMixin`); `meeting_id UUID NOT NULL`; `category meeting_insight_category NOT NULL`; `title TEXT NOT NULL`; `description TEXT NOT NULL`; `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
+- **Foreign key:** `fk_meeting_insights_meeting_id_meetings` references `meetings.id` with `ON DELETE CASCADE`.
+- **Relationship:** Meeting has zero or many insights; the ORM relationship uses `cascade="all, delete-orphan"`.
+- **Lifecycle/constraints:** Immutable candidate snapshot; no `updated_at`, status, version, run ID, or provider metadata. No category/title uniqueness constraint or semantic deduplication; similar findings from different runs may coexist.
+- **Migration state:** Defined in `0005_meeting_insights`; not yet applied or validated against PostgreSQL.
 
 ## Planned tables (not implemented)
 
@@ -99,9 +107,3 @@ database and was validated by PostgreSQL integration tests.
 
 - **Purpose:** Multi-tenant workspace boundary.
 - **Key columns:** `id` (UUID PK), `name`, `slug` (unique), `created_at`.
-
-### meeting_insights
-
-Implemented by revision `0005_meeting_insights`, one row per typed candidate.
-There is no run record, processing status, version, or semantic replacement
-policy in this phase; repeated candidates are preserved as separate rows.

@@ -1,6 +1,6 @@
 # Database Architecture
 
-> MannerAI Meetings Platform — PostgreSQL persistence and current domain schema through Phase 5.
+> MannerAI Meetings Platform — PostgreSQL persistence boundary and schema definitions through Phase 7.
 
 ## Stack
 
@@ -29,8 +29,11 @@ PostgreSQL
 
 **Current ownership:** gateway-service initializes PostgreSQL for users and
 refresh sessions; meeting-service initializes it for meetings, transcripts,
-summaries, tasks, decisions, follow-ups, and meeting insights. Both use the shared async
-engine/session infrastructure and canonical Alembic schema.
+summaries, tasks, decisions, and follow-ups. MeetingInsight ORM/schema and
+repository support are defined in Meeting Service, but its migration is
+unapplied and its table is not assumed to exist in the current database. Both
+services use the shared async engine/session infrastructure and canonical
+Alembic schema for applied migrations.
 
 ## Engine vs session
 
@@ -105,21 +108,25 @@ the contract's `created_at`, schedule, and send timestamps. Statuses use native
 PostgreSQL enums whose values match the Pydantic contracts. JSONB holds the
 existing list-shaped `key_topics`, `participants`, and `recipients` values.
 
-Phase 7.4 defines MeetingInsight as one row per typed insight candidate
-(`category`, `title`, `description`). Meeting has zero or many insights. Rows
-have UUID identity and `created_at`, cascade with Meeting deletion, and have no
-update/status/version lifecycle. The shared category enum controls AI
-validation and PostgreSQL values. Regeneration can create another row; similar
-findings are not deduplicated or replaced. Those processing policies remain
-deferred.
+Phase 7.4 defines `MeetingInsight` as one immutable snapshot per typed insight
+candidate. Its columns are UUID `id`, required UUID `meeting_id`, required
+`meeting_insight_category` `category`, required `title` and `description` text,
+and required timezone-aware `created_at` with a database `now()` default. It
+has no `updated_at`, status, version, processing run ID, or provider metadata.
+`Meeting.insights` is a one-to-many ORM relationship with `delete-orphan`; the
+foreign key cascades on Meeting deletion. The shared `InsightCategory` enum
+supplies the same controlled values to validation and the native PostgreSQL
+enum. There is no semantic deduplication or replacement policy, so similar
+findings from separate runs may coexist.
 
-The application mapper produces `MeetingInsightBase` values with a trusted
-meeting ID; the model assigns its UUID and database timestamp. The
-`MeetingInsightRepository` provides create, get-by-ID, and meeting-scoped list
-queries, flushing writes without committing. No service or public route is
-introduced in this persistence-only block. Revision `0005_meeting_insights`
-defines the schema but remains unapplied pending deliberate PostgreSQL
-integration.
+The AI mapper produces `MeetingInsightBase` values with a trusted meeting ID;
+it does not persist them. `MeetingInsightRepository` provides create,
+get-by-ID, and meeting-scoped list queries, flushing writes without committing.
+There is no insight-specific domain service or public route. Revision
+`0005_meeting_insights` defines the schema but is currently unapplied and has
+not been validated against PostgreSQL. Applying it remains a deliberate future
+database action; the presence of ORM metadata does not mean the live database
+contains the table.
 
 ### Result indexes and query behavior
 

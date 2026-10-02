@@ -1,7 +1,7 @@
 # MannerAI Meetings Platform — Foundation and Current State
 
-> **Current scope:** Phase 0 through **Phase 6**
-> **Current implementation:** Authentication and refresh sessions, authenticated Gateway-to-Meeting identity, Meeting Service persistence APIs, and the provider-independent AI Service foundation
+> **Current scope:** Phase 0 through **Phase 7.6**
+> **Current implementation:** Authentication and Meeting Service APIs/persistence, plus the complete Phase 7 AI application and deterministic integration-test boundary
 > **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
 This is the current reference for implemented architecture. The later
@@ -9,13 +9,15 @@ This is the current reference for implemented architecture. The later
 it must not be read as the current implementation status.
 
 Phase 5 completes the Meeting domain persistence and API slice on top of Phase
-4 identity and ownership. PostgreSQL is synchronized through
-`0004_meeting_domain_results`; the integration, security, and full backend
-results are recorded in the Phase 5 section below. Phase 6 adds the AI Service
-contracts, provider abstraction, five typed agents, and deterministic
-orchestration. Real provider execution, persistence mapping, MeetingInsight
-persistence, background processing, search, and frontend integration remain
-deferred.
+4 identity and ownership. PostgreSQL was synchronized through
+`0004_meeting_domain_results`; the historical verification evidence is recorded
+in the Phase 5 section below. Phase 6 established AI contracts, provider
+abstraction, five typed agents, and orchestration. Phase 7 completes the
+provider adapter, transcript normalization, structured-output/domain mapping,
+MeetingInsight schema and repository boundary, `AIProcessingService`, and
+deterministic application-path integration tests. Revision `0005_meeting_insights`
+is defined but unapplied. Public AI API exposure, automatic persistence,
+background execution, search, and frontend integration remain deferred.
 
 ---
 
@@ -35,6 +37,7 @@ deferred.
 | 4 | Authentication & Authorization | Complete |
 | 5.1–5.5 | Complete Meeting Domain / Meeting Service MVP | Complete; PostgreSQL synchronized and integration-validated |
 | 6.1–6.5 | AI Service Foundation | Complete; provider-independent contracts, agents, orchestration, and hardening |
+| 7.1–7.6 | AI Meeting Intelligence Integration | Complete; provider adapter, transcript path, typed mapping, persistence design, application service, and deterministic integration tests |
 
 ---
 
@@ -88,6 +91,7 @@ flowchart TB
 - AI Service processing contracts, injected provider protocol, structured-output validation, and sanitized errors
 - Common `Agent` architecture and `SummaryAgent`, `TaskAgent`, `DecisionAgent`, `FollowUpAgent`, and `InsightAgent`
 - Sequential operation orchestration with typed results and partial-failure semantics
+- Phase 7 transcript-to-domain-input AI processing path; see the Phase 7 section below
 
 ### Planned / deferred integrations
 
@@ -95,9 +99,11 @@ flowchart TB
 - Redis client wiring
 - Qdrant vector operations
 - Celery worker execution
-- Real model-provider implementation and provider-specific integration
-- AI-output mapping and persistence through Meeting Service; MeetingInsight persistence design
-- Background processing and production pipeline integration
+- Background processing and production pipeline/Gateway integration
+- Automatic AI-output persistence after mapping
+- Applying and PostgreSQL-validating `0005_meeting_insights`
+- Public AI processing/job APIs
+- Semantic search and vector retrieval
 - Docker/deployment hardening (intentionally deferred)
 - Frontend integration
 
@@ -111,11 +117,11 @@ Configuration fields and stub modules exist for Redis, Qdrant, and Celery, but t
 |---------|---------------------|-----------|--------|
 | **gateway-service** | Public API, auth/user routes, meeting/result facade, OpenAPI, health probes | **PostgreSQL (users/sessions)** | Phase 4 authentication; Phase 5 public v1 proxies |
 | **meeting-service** | Health probes, PostgreSQL lifecycle/readiness, meeting-domain APIs | **PostgreSQL (meetings/transcripts/results)** | Ownership-enforced service and domain persistence |
-| **ai-service** | Health probes plus provider-independent contracts, agents, and orchestration | None | Phase 6 foundation; no real provider or persistence mapping |
+| **ai-service** | Health probes plus `AIProcessingService`, transcript normalization, five agents, provider adapter, typed orchestration and domain mapping | None | Phase 7 application path complete; returns domain-ready inputs without persistence |
 | **search-service** | Health probes | None | Foundation only |
 | **worker-service** | Health probes | None | Foundation only |
 
-**Database ownership principle:** A service gets database access when it owns a persistence responsibility. Gateway owns user and refresh-session persistence; Meeting Service owns meetings, transcripts, summaries, tasks, decisions, and follow-ups. The AI Service returns typed candidate outputs and remains persistence-independent; search and worker PostgreSQL access also remains deferred.
+**Database ownership principle:** A service gets database access when it owns a persistence responsibility. Gateway owns user and refresh-session persistence; Meeting Service owns meetings, transcripts, and persisted domain results, including the defined MeetingInsight repository boundary. The AI Service returns mapped domain inputs and remains persistence-independent; applying migration 0005 and invoking persistence after AI processing are separate responsibilities. Search and worker PostgreSQL access remain deferred.
 
 ---
 
@@ -554,7 +560,7 @@ wrapped exception causes/diagnostics and maps the duplicate
 `(meeting_id, version)` constraint to `ConflictError`. The live integration test
 confirmed the behavior.
 
-## Phase 6 — AI Service Foundation
+## Phase 6 — AI Service Foundation (historical checkpoint)
 
 Phase 6 Blocks 1–5 establish a provider-independent AI Service foundation in
 `backend/ai-service/`. The AI Service accepts caller-supplied transcript input
@@ -571,13 +577,14 @@ caller-supplied `TranscriptContent` (transcript ID, optional language, and
 ordered segments), and optional meeting context. The orchestrator rejects
 meeting or transcript ID mismatches before calling a provider.
 
-The `ModelProvider` protocol accepts a provider-neutral `ModelRequest` and
+At the end of Phase 6, the `ModelProvider` protocol accepted a provider-neutral `ModelRequest` and
 returns a `ModelResponse`. Agents receive the provider through dependency
 injection and use the shared `generate_structured_output()` boundary, which
 adds the selected output model's JSON schema and validates returned JSON with
 Pydantic. The error taxonomy covers unavailable, unconfigured, timeout,
-rejected, malformed, and unexpected failures with sanitized messages. No real
-provider client or provider-specific integration is implemented.
+rejected, malformed, and unexpected failures with sanitized messages. At that
+checkpoint no concrete provider client was implemented; Phase 7 adds the
+OpenAI adapter described below.
 
 ### Common Agent architecture and output contracts
 
@@ -597,9 +604,9 @@ separately from model output.
 | `FollowUpAgent` | Draft `subject`, `body_html`, and recipients with transcript-level name and/or validated email; no status, scheduling, sending, or user-ID resolution |
 | `InsightAgent` | Controlled category (`risk`, `blocker`, `concern`, `opportunity`, `dependency`, `unresolved`, `disagreement`, or `observation`), `title`, and `description`; conservative and transcript-grounded, without MeetingInsight persistence fields |
 
-`MeetingInsight` persistence is not defined: its stored shape, cardinality, and
-lifecycle/version semantics remain undecided. Agent output contracts are not
-the Meeting Service's domain persistence schemas or ORM models.
+At the Phase 6 checkpoint, `MeetingInsight` persistence was not defined. Phase 7
+adds its schema and repository boundary, documented below. Agent output
+contracts remain distinct from Meeting Service domain DTOs and ORM models.
 
 ### Transcript source-data boundary
 
@@ -651,16 +658,105 @@ Using the project `.venv`, the final Phase 6 validation reported:
 The skipped PostgreSQL checks are opt-in integration tests and are not counted
 as passing database evidence. The Phase 6 validation did not apply migrations.
 
-### Deferred after Phase 6
+### Deferred after the Phase 6 checkpoint (historical list)
 
-- A real `ModelProvider` implementation and provider-specific integration.
-- Mapping AI candidate outputs to Meeting Service schemas, ORM models, and
-  persistence use cases.
-- MeetingInsight persistence design.
+- A concrete `ModelProvider` implementation and provider-specific integration
+  were deferred at this checkpoint; Phase 7 has since added the OpenAI adapter.
+- AI-output mapping, MeetingInsight persistence, and the processing service
+  were deferred at this checkpoint; Phase 7 has since added these boundaries.
 - Background processing and Redis/Celery integration.
 - Production pipeline and Gateway integration, semantic search, and frontend
   integration.
-- Docker/infrastructure work and later Phase 7+ roadmap work.
+- Docker/infrastructure work and later roadmap phases.
+
+## Phase 7 — AI Meeting Intelligence Integration (complete)
+
+Phase 7.1–7.6 connects the existing typed agent foundation to a concrete
+provider adapter, caller-supplied transcript input, domain mapping, and a
+deterministic application-path test suite. Completion means this in-process
+application boundary is implemented and tested. It does not mean that the
+Gateway exposes AI processing, that requests run as background jobs, or that
+successful mapped values are automatically persisted.
+
+| Block | Implemented boundary |
+|-------|----------------------|
+| 7.1 Real Model Provider | Provider-neutral `ModelProvider` protocol plus an injected OpenAI adapter. Deterministic tests do not use OpenAI or make network calls. |
+| 7.2 Transcript Processing Integration | `TranscriptInDB` is normalized into provider-neutral `AgentInput`; segment ordering, speaker, text, timestamps, language, and trusted IDs are preserved/validated. Agents do not retrieve transcripts from a database. |
+| 7.3 AI Output Validation & Domain Mapping | Shared structured JSON/Pydantic validation and explicit mappings from all five typed agent outputs to existing domain input schemas. Mapping errors are isolated per operation. |
+| 7.4 MeetingInsight Persistence | Shared `InsightCategory`, `MeetingInsight` ORM/schema, Meeting relationship, meeting-scoped repository, and reversible Alembic revision `0005_meeting_insights`. Migration is defined but unapplied and not PostgreSQL-validated. |
+| 7.5 AI Processing Service Contract | `AIProcessingService` coordinates transcript normalization, one orchestrator call, identity checks, output mapping, ordered typed results, and safe operation-level failure aggregation. It has no persistence/session/repository dependency. |
+| 7.6 AI Integration Testing | Test-only deterministic `ModelProvider` exercises the real service → orchestrator → agents → structured validation → domain mapping path with success, empty, malformed, partial-failure, identity, transcript-preservation, and no-persistence scenarios. |
+
+### Current AI application flow
+
+```text
+ProcessingRequest + caller-loaded TranscriptInDB
+  → transcript normalization → AgentInput
+  → AIProcessingService → AIProcessingOrchestrator
+  → SummaryAgent / TaskAgent / DecisionAgent / FollowUpAgent / InsightAgent
+  → injected ModelProvider (OpenAI adapter available; no public pipeline wiring)
+  → structured JSON validation into typed AI outputs
+  → domain mapping into domain-ready Pydantic inputs
+  → caller-owned decision about invoking domain persistence
+```
+
+The agents are persistence-agnostic. They receive normalized application data,
+construct provider-neutral requests, and return typed output models that do not
+contain persistence IDs or lifecycle metadata. The application request supplies
+trusted meeting/transcript identities; the service and orchestrator validate
+those identities and mappers use the trusted meeting ID. Schema validation
+checks structure and controlled fields but cannot guarantee semantic grounding.
+
+The operation order is request order; duplicate requests are deduplicated at
+request construction while preserving first occurrence. Each operation returns
+a typed success or a sanitized failure. Aggregate status is `completed`,
+`partially_failed`, or `failed`; a failed operation does not erase other
+successes. There is no retry, concurrency, or persistence side effect in this
+service boundary.
+
+### Domain mapping limits and insight lifecycle
+
+- Task candidates may include a calendar `due_date`, but the current Task
+  domain requires a datetime `due_at`; the mapper does not invent a time or
+  timezone. Transcript assignee names are not resolved into User UUIDs.
+- Follow-up candidates may identify recipient names, but the current domain
+  requires email addresses; the mapper does not infer addresses.
+- Insight categories use the shared `InsightCategory` enum. Typed schemas do
+  not mathematically guarantee that claims are grounded in the transcript.
+- MeetingInsight rows are immutable snapshots with UUID `id`, `meeting_id`,
+  `category`, `title`, `description`, and `created_at`. Meeting deletion
+  cascades through the FK and ORM `delete-orphan` relationship. There is no
+  `updated_at`, status, version, processing run ID, provider metadata, or
+  semantic deduplication/replacement policy; similar results may coexist.
+- The migration and repository are defined, but revision `0005_meeting_insights`
+  is not applied or validated against PostgreSQL. AIProcessingService does not
+  call the repository or commit results.
+
+### Phase 7 validation evidence
+
+The Phase 7.6 validation used the repository virtual environment and a
+test-only deterministic provider:
+
+- Full backend suite: **422 tests run, 8 skipped; all non-skipped tests passed**.
+- AI tests: **153 passed**; domain mapping: **10 passed**; processing service:
+  **14 passed**; MeetingInsight persistence unit tests: **10 passed**.
+- Meeting domain: **41 passed**; transcript routes: **11 passed**; meeting
+  routes: **22 passed**.
+- `pip check`: **No broken requirements found**.
+- `git diff --check`: **passed**.
+- The 8 skips are opt-in tests; these results do not represent PostgreSQL
+  validation of MeetingInsight or application of migration 0005.
+
+### Deferred after Phase 7
+
+- Applying and validating `0005_meeting_insights` against a suitable PostgreSQL
+  database.
+- An insight domain service and explicit application flow from mapped AI output
+  into MeetingInsight persistence.
+- Public/internal processing APIs, Gateway pipeline integration, background
+  jobs, Redis/Celery execution, retries, and idempotency.
+- Semantic insight deduplication/replacement, search/Qdrant/RAG, analytics,
+  frontend AI workflow, Gmail delivery, and production deployment.
 
 ## Phase 3 persistence architecture (historical baseline)
 
@@ -1029,17 +1125,17 @@ meeting-summarizer-follow-up-ai-agent/
 
 - Organization membership and authorization for organization-wide meeting listing
 - Public Gateway listing of meetings by organization
-- AI-result persistence mapping and meeting upload processing
-- Real provider clients and provider-specific integration
-- MeetingInsight persistence design
+- Public AI processing API, Gateway pipeline integration, and meeting upload processing
+- Automatic persistence invocation after AI processing; the processing service returns domain-ready inputs only
+- Applying and PostgreSQL-validating `0005_meeting_insights`
 - Semantic search and vector indexing
-- Background AI processing, Celery task execution, and worker DB strategy
+- Background AI processing, Celery execution/retries/idempotency, and worker DB strategy
 - Redis client wiring (cache, sessions, broker)
 - Qdrant vector store operations
 - Production AI pipeline/Gateway integration
 - Frontend API clients (scaffolded, throw `NotImplementedError`)
 - Docker/deployment production hardening
-- Later Phase 7+ roadmap work
+- Later roadmap phases including analytics, Gmail, and production deployment
 - Rate limiting, CORS, gateway lifespan (postgres/redis)
 - Cursor pagination for search
 - Frontend correlation ID propagation

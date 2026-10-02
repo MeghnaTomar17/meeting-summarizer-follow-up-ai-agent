@@ -1,10 +1,10 @@
 # MannerAI Meetings Platform
 
-AI-powered meeting intelligence: transcripts, summaries, action items, decisions, follow-ups, semantic search, and analytics.
+Meeting intelligence platform project: transcript processing and typed AI summaries, action items, decisions, follow-ups, with semantic search and analytics planned for later phases.
 
 ## Status
 
-**Current checkpoint: Phase 7.5 — AI Processing Service Contract.** Phases 0–6 are complete. Phase 7.1 added the OpenAI provider adapter; 7.2 transcript normalization; 7.3 domain mapping; 7.4 MeetingInsight persistence model and repository with migration `0005` defined but unapplied; and 7.5 an application service that returns domain-ready outputs with operation-level failures and performs no persistence. Public processing routes, background execution, and production pipeline integration remain deferred. See the [AI processing architecture](docs/architecture/overview.md) and [Phase 6 foundation checkpoint](docs/architecture/project-foundation.md).
+**Current checkpoint: Phase 7 — AI Meeting Intelligence Integration (complete).** The AI application path accepts a caller-supplied transcript, normalizes it, runs five typed agents through an injected `ModelProvider`, validates structured responses, and maps successful outputs into domain-ready inputs. The OpenAI adapter is implemented; deterministic integration tests exercise the application path without network calls. `MeetingInsight` has an ORM/schema/repository and migration `0005_meeting_insights`, which remains defined but unapplied. `AIProcessingService` does not load or persist records. Public AI processing APIs, background execution, and production pipeline integration remain deferred. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -14,8 +14,8 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 |-------|----------------|
 | Frontend | React, TypeScript, Vite, TailwindCSS |
 | Backend | FastAPI (microservices) |
-| Data | PostgreSQL, Redis, Qdrant |
-| AI | Provider-neutral AI foundation; OpenAI and Gemini integration deferred |
+| Data | PostgreSQL for current domain persistence; Redis and Qdrant are future integrations |
+| AI | Provider-neutral contracts and five agents; OpenAI adapter implemented; no public processing route |
 | Workers | Celery and Redis configured for future work; background execution deferred |
 | Ops | Docker, Docker Compose, Nginx |
 
@@ -111,11 +111,11 @@ Each service exposes:
 
 | Service | Port (default) | Responsibility |
 |---------|----------------|----------------|
-| gateway-service | 8000 | Auth, routing, validation, analytics & integration APIs |
-| meeting-service | 8001 | Meetings CRUD, uploads, transcripts, audio processing |
-| ai-service | 8002 | AI contracts, agents, and orchestration; no real provider or persistence integration yet |
-| search-service | 8003 | Embeddings, semantic retrieval, vector search |
-| worker-service | 8004 | Celery background jobs (HTTP health in Phase 1; worker process in Phase 7) |
+| gateway-service | 8000 | Authentication and public meeting/domain API routing |
+| meeting-service | 8001 | Meeting, transcript, and domain-result APIs and persistence |
+| ai-service | 8002 | Transcript-to-domain-input AI processing; no database persistence side effects |
+| search-service | 8003 | Health probes; embeddings, retrieval, and vector search remain deferred |
+| worker-service | 8004 | Health probes; background worker execution remains deferred |
 
 ## Development
 
