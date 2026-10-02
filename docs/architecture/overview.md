@@ -6,7 +6,7 @@
 
 ## System context
 
-The platform persists meetings, transcripts, and domain results behind a Gateway and Meeting Service. Phase 7 implements and tests the AI application path from a caller-supplied transcript through normalization, orchestration, five agents, an injected provider, typed output validation, and domain mapping. `AIProcessingService` returns trusted, domain-ready inputs with operation-level failures; it does not retrieve transcripts from storage or persist results. The OpenAI adapter is one `ModelProvider` implementation. Deterministic integration tests use a test-only provider and make no network calls.
+The platform persists meetings, transcripts, and domain results behind a Gateway and Meeting Service. Phase 7 implements and tests the AI application path from a caller-supplied transcript through normalization, orchestration, five agents, an injected provider, typed output validation, and domain mapping. `AIProcessingService` returns trusted, domain-ready inputs with operation-level failures; it does not retrieve transcripts from storage or persist results. Phase 8 adds a process-local job-submission boundary whose executor delegates to that existing service. The OpenAI adapter is one `ModelProvider` implementation. Deterministic integration tests use a test-only provider and make no network calls.
 
 ## Current AI processing boundary (Phase 7)
 
@@ -42,10 +42,43 @@ validation checks shape and types, not whether a claim is semantically true.
 Successful mappings are not automatically written to PostgreSQL. MeetingInsight
 has persistence models and a repository, but no automatic AI-to-database path.
 
-The implemented application path is synchronous orchestration in-process; it
-does not mean HTTP requests are queued or processed in the background. Redis,
-Celery, retries, job/idempotency contracts, public AI endpoints, and frontend
-workflow integration remain future work.
+The implemented AI-processing path is synchronous orchestration in-process; it
+does not mean HTTP requests are queued or processed in the background. Phase 8
+adds a separate, framework-neutral submission/execution boundary described
+below. Redis/Celery, retries, durable job state, public AI endpoints, and
+frontend workflow integration remain future work.
+
+## Phase 8 job boundary (framework-neutral, in-process)
+
+```text
+Caller → JobSubmissionPort → AIProcessingJob (queued)
+                                  ↓ explicit local dispatch
+                         AIProcessingJobExecutor
+                                  ↓
+                       injected TranscriptResolver
+                                  ↓
+                        AIProcessingService
+                                  ↓
+                existing orchestration and mapping path
+```
+
+`AIProcessingJob` carries a stable UUID, meeting/transcript IDs, requested
+operations, optional context, timestamps, controlled status, and sanitized
+failure/result metadata. Its lifecycle allows `queued → running → completed`,
+`queued/running → failed`, or `running → partially_failed`. The executor
+resolves and validates transcript identity, constructs the existing
+`ProcessingRequest`, and delegates to `AIProcessingService`; it does not
+duplicate AI processing or persist results. Per-operation failures remain in
+`AIProcessingResult`; total AI failure, invalid input, mapping failure, and
+unexpected execution failure produce distinct safe job failures.
+
+`InProcessJobSubmissionPort` is a FIFO `asyncio.Queue` that accepts a job and
+returns a queued receipt; tests/development explicitly dispatch one job with
+`run_next()`. This is process-local only: queued jobs disappear on process
+exit, state is not durable, retries/locking/deduplication are absent, and
+exactly-once execution is not guaranteed. The existing direct
+`AIProcessingService` call remains available. Redis/Celery adapters and worker
+execution belong to Phase 9; no public job endpoint is introduced here.
 
 ## Microservices
 

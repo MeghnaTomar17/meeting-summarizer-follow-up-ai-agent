@@ -1,7 +1,7 @@
 # MannerAI Meetings Platform — Foundation and Current State
 
-> **Current scope:** Phase 0 through **Phase 7.6**
-> **Current implementation:** Authentication and Meeting Service APIs/persistence, plus the complete Phase 7 AI application and deterministic integration-test boundary
+> **Current scope:** Phase 0 through **Phase 8 application boundary**
+> **Current implementation:** Authentication and Meeting Service APIs/persistence, Phase 7 AI processing, and the framework-neutral Phase 8 job contract/executor boundary
 > **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
 This is the current reference for implemented architecture. The later
@@ -15,9 +15,12 @@ in the Phase 5 section below. Phase 6 established AI contracts, provider
 abstraction, five typed agents, and orchestration. Phase 7 completes the
 provider adapter, transcript normalization, structured-output/domain mapping,
 MeetingInsight schema and repository boundary, `AIProcessingService`, and
-deterministic application-path integration tests. Revision `0005_meeting_insights`
-is defined but unapplied. Public AI API exposure, automatic persistence,
-background execution, search, and frontend integration remain deferred.
+deterministic application-path integration tests. Phase 8 adds a process-local
+job submission/execution boundary that delegates to `AIProcessingService`;
+Redis/Celery and durable job state remain deferred to later phases.
+Revision `0005_meeting_insights` is defined but unapplied. Public AI API
+exposure, automatic persistence, search, and frontend integration remain
+deferred.
 
 ---
 
@@ -38,6 +41,7 @@ background execution, search, and frontend integration remain deferred.
 | 5.1–5.5 | Complete Meeting Domain / Meeting Service MVP | Complete; PostgreSQL synchronized and integration-validated |
 | 6.1–6.5 | AI Service Foundation | Complete; provider-independent contracts, agents, orchestration, and hardening |
 | 7.1–7.6 | AI Meeting Intelligence Integration | Complete; provider adapter, transcript path, typed mapping, persistence design, application service, and deterministic integration tests |
+| 8 | Background Processing Application Boundary | Implemented; framework-neutral job contract, executor/submission ports, and process-local FIFO adapter; no durable/distributed queue |
 
 ---
 
@@ -99,7 +103,7 @@ flowchart TB
 - Redis client wiring
 - Qdrant vector operations
 - Celery worker execution
-- Background processing and production pipeline/Gateway integration
+- Distributed worker execution and production pipeline/Gateway integration
 - Automatic AI-output persistence after mapping
 - Applying and PostgreSQL-validating `0005_meeting_insights`
 - Public AI processing/job APIs
@@ -117,11 +121,11 @@ Configuration fields and stub modules exist for Redis, Qdrant, and Celery, but t
 |---------|---------------------|-----------|--------|
 | **gateway-service** | Public API, auth/user routes, meeting/result facade, OpenAPI, health probes | **PostgreSQL (users/sessions)** | Phase 4 authentication; Phase 5 public v1 proxies |
 | **meeting-service** | Health probes, PostgreSQL lifecycle/readiness, meeting-domain APIs | **PostgreSQL (meetings/transcripts/results)** | Ownership-enforced service and domain persistence |
-| **ai-service** | Health probes plus `AIProcessingService`, transcript normalization, five agents, provider adapter, typed orchestration and domain mapping | None | Phase 7 application path complete; returns domain-ready inputs without persistence |
+| **ai-service** | Health probes plus job contracts/executor, `AIProcessingService`, transcript normalization, five agents, provider adapter, typed orchestration and domain mapping | None | Phase 7 path plus Phase 8 process-local job boundary; no persistence or durable queue |
 | **search-service** | Health probes | None | Foundation only |
 | **worker-service** | Health probes | None | Foundation only |
 
-**Database ownership principle:** A service gets database access when it owns a persistence responsibility. Gateway owns user and refresh-session persistence; Meeting Service owns meetings, transcripts, and persisted domain results, including the defined MeetingInsight repository boundary. The AI Service returns mapped domain inputs and remains persistence-independent; applying migration 0005 and invoking persistence after AI processing are separate responsibilities. Search and worker PostgreSQL access remain deferred.
+**Database ownership principle:** A service gets database access when it owns a persistence responsibility. Gateway owns user and refresh-session persistence; Meeting Service owns meetings, transcripts, and persisted domain results, with the MeetingInsight repository boundary defined pending migration 0005. The AI Service returns mapped domain inputs and remains persistence-independent; applying migration 0005 and invoking persistence after AI processing are separate responsibilities. Search and worker PostgreSQL access remain deferred.
 
 ---
 
@@ -747,7 +751,7 @@ test-only deterministic provider:
 - The 8 skips are opt-in tests; these results do not represent PostgreSQL
   validation of MeetingInsight or application of migration 0005.
 
-### Deferred after Phase 7
+### Deferred at the end of Phase 7 (historical checkpoint)
 
 - Applying and validating `0005_meeting_insights` against a suitable PostgreSQL
   database.
@@ -757,6 +761,51 @@ test-only deterministic provider:
   jobs, Redis/Celery execution, retries, and idempotency.
 - Semantic insight deduplication/replacement, search/Qdrant/RAG, analytics,
   frontend AI workflow, Gmail delivery, and production deployment.
+
+## Phase 8 — Background Processing Application Boundary
+
+Phase 8 adds typed background-job contracts and separates submission from
+execution without coupling the AI application layer to HTTP, Celery, Redis, or
+database job storage.
+
+```text
+JobSubmissionPort → AIProcessingJob (queued)
+                          ↓ explicit in-process dispatch
+                   JobExecutorService
+                          ↓ transcript resolver
+                   AIProcessingService
+                          ↓
+           existing orchestrator / agents / mapper
+```
+
+`AIProcessingJob` carries a generated/stable job UUID, meeting and transcript
+UUIDs, requested operations, optional processing context, timezone-aware
+timestamps, controlled status, and optional safe failure/result metadata.
+Operation duplicates are normalized using the existing first-occurrence
+ordering semantics. The job snapshot enforces allowed transitions:
+
+- `queued → running → completed`
+- `queued/running → failed`
+- `running → partially_failed`
+
+The terminal status follows `AIProcessingResult`: complete success maps to
+`completed`, mixed operation outcomes to `partially_failed`, and total failure
+to `failed`. Invalid job/transcript input, AI processing failure, domain mapping
+failure, and unexpected execution failure have distinct sanitized job-level
+codes. Operation-level error detail remains in the typed `AIProcessingResult`.
+
+`AIProcessingJobExecutorService` resolves the transcript through the injected
+`TranscriptResolver`, validates meeting/transcript identity, rebuilds the
+existing `ProcessingRequest`, and calls `AIProcessingService`. The direct
+service call remains available, and the executor contains no provider/agent
+logic or persistence dependency.
+
+`InProcessJobSubmissionPort` is a development/test FIFO queue backed by
+`asyncio.Queue`; submission returns a queued receipt and a caller explicitly
+dispatches work with `run_next()`. It is not a distributed worker system. Jobs
+and outcomes are not durably stored; pending jobs are lost at process exit.
+There are no retries, distributed locking, durable idempotency, or exactly-once
+guarantees. Redis/Celery worker adapters are deferred to Phase 9.
 
 ## Phase 3 persistence architecture (historical baseline)
 
