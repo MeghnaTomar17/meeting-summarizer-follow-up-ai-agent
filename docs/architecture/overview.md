@@ -55,7 +55,9 @@ Caller → JobSubmissionPort → AIProcessingJob (queued)
                                   ↓ explicit local dispatch
                          AIProcessingJobExecutor
                                   ↓
-                       injected TranscriptResolver
+                   TranscriptInputProvider
+                                  ↓
+                  verified TranscriptInDB DTO
                                   ↓
                         AIProcessingService
                                   ↓
@@ -72,13 +74,30 @@ duplicate AI processing or persist results. Per-operation failures remain in
 `AIProcessingResult`; total AI failure, invalid input, mapping failure, and
 unexpected execution failure produce distinct safe job failures.
 
+`TranscriptInputProvider` is an application port that resolves exactly the
+meeting/transcript pair in the job and returns the shared `TranscriptInDB`
+contract. The executor checks both IDs before delegating. The existing
+`AIProcessingService` then applies the Phase 7 normalization path, which
+preserves segment order, speaker, timestamps, language, and trusted IDs.
+Agents and the AI service remain unaware of ORM/database access. The AI result
+contains domain-ready inputs but is not automatically persisted.
+
+Meeting Service transcript access currently checks ownership through an
+authenticated principal. There is not yet a trusted principal context in the
+background submission contract, so a production provider must be wired only
+when that identity can be propagated through the existing ownership mechanism;
+the job boundary does not bypass it. Provider not-found, invalid transcript,
+and unexpected execution failures produce controlled job failures without
+exposing database exception details.
+
 `InProcessJobSubmissionPort` is a FIFO `asyncio.Queue` that accepts a job and
 returns a queued receipt; tests/development explicitly dispatch one job with
-`run_next()`. This is process-local only: queued jobs disappear on process
-exit, state is not durable, retries/locking/deduplication are absent, and
-exactly-once execution is not guaranteed. The existing direct
-`AIProcessingService` call remains available. Redis/Celery adapters and worker
-execution belong to Phase 9; no public job endpoint is introduced here.
+`run_next()`, which passes it to the same executor. This is process-local only:
+queued jobs disappear on process exit, state is not durable, retries/locking/
+deduplication are absent, and exactly-once execution is not guaranteed. The
+existing direct `AIProcessingService` call remains available. Redis/Celery
+adapters and worker execution belong to Phase 9; no public job endpoint is
+introduced here.
 
 ## Microservices
 

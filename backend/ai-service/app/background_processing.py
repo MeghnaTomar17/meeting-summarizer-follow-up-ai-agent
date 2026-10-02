@@ -34,6 +34,8 @@ class AIProcessingJobStatus(StrEnum):
 
 class JobFailureCode(StrEnum):
     INVALID_INPUT = "invalid_input"
+    TRANSCRIPT_NOT_FOUND = "transcript_not_found"
+    TRANSCRIPT_UNAVAILABLE = "transcript_unavailable"
     AI_PROCESSING_FAILED = "ai_processing_failed"
     DOMAIN_MAPPING_FAILED = "domain_mapping_failed"
     EXECUTION_FAILED = "execution_failed"
@@ -41,6 +43,8 @@ class JobFailureCode(StrEnum):
 
 _SAFE_FAILURE_MESSAGES = {
     JobFailureCode.INVALID_INPUT: "The processing job input is invalid.",
+    JobFailureCode.TRANSCRIPT_NOT_FOUND: "The requested transcript is unavailable.",
+    JobFailureCode.TRANSCRIPT_UNAVAILABLE: "The requested transcript is unavailable.",
     JobFailureCode.AI_PROCESSING_FAILED: "AI processing failed for all requested operations.",
     JobFailureCode.DOMAIN_MAPPING_FAILED: "AI results could not be mapped to domain inputs.",
     JobFailureCode.EXECUTION_FAILED: "The processing job could not be executed.",
@@ -225,17 +229,35 @@ class InvalidJobInputError(ValueError):
 
 
 class TranscriptResolutionError(Exception):
-    """Expected resolver failure, such as a missing transcript."""
+    """Expected transcript-provider failure with no infrastructure detail."""
+
+
+class TranscriptNotFoundError(TranscriptResolutionError):
+    """The requested meeting or transcript does not exist or is not accessible."""
+
+
+class TranscriptUnavailableError(TranscriptResolutionError):
+    """The transcript exists but cannot be supplied as valid processing input."""
 
 
 class NoQueuedJobError(LookupError):
     """The in-process submission adapter has no waiting job to execute."""
 
 
-class TranscriptResolver(Protocol):
+class TranscriptInputProvider(Protocol):
+    """Resolve the requested transcript through the application/domain boundary.
+
+    Implementations may use MeetingService and its ownership checks, but return
+    only the shared transcript DTO. ORM and repository objects stay outside AI.
+    """
+
     async def get_transcript(
         self, meeting_id: UUID, transcript_id: UUID
     ) -> TranscriptInDB: ...
+
+
+# Compatibility alias for the Phase 8.1 name.
+TranscriptResolver = TranscriptInputProvider
 
 
 class AIProcessingJobExecutor(Protocol):
@@ -248,7 +270,7 @@ class AIProcessingJobExecutorService:
     def __init__(
         self,
         processing_service: AIProcessingService,
-        transcript_resolver: TranscriptResolver,
+        transcript_resolver: TranscriptInputProvider,
     ) -> None:
         self._processing_service = processing_service
         self._transcript_resolver = transcript_resolver
@@ -276,7 +298,13 @@ class AIProcessingJobExecutorService:
             ):
                 raise RuntimeError("Processing service result did not match the job.")
             return running.finish(result)
-        except (InvalidJobInputError, TranscriptResolutionError):
+        except InvalidJobInputError:
+            return running.fail(JobFailureCode.INVALID_INPUT)
+        except TranscriptNotFoundError:
+            return running.fail(JobFailureCode.TRANSCRIPT_NOT_FOUND)
+        except TranscriptUnavailableError:
+            return running.fail(JobFailureCode.TRANSCRIPT_UNAVAILABLE)
+        except TranscriptResolutionError:
             return running.fail(JobFailureCode.INVALID_INPUT)
         except Exception:
             # Keep internal exceptions out of the job contract; never turn them into success.
@@ -351,7 +379,10 @@ __all__ = [
     "InvalidJobInputError",
     "TranscriptResolutionError",
     "NoQueuedJobError",
+    "TranscriptInputProvider",
     "TranscriptResolver",
+    "TranscriptNotFoundError",
+    "TranscriptUnavailableError",
     "AIProcessingJobExecutor",
     "AIProcessingJobExecutorService",
     "JobSubmissionReceipt",

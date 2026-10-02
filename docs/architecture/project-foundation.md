@@ -795,14 +795,23 @@ failure, and unexpected execution failure have distinct sanitized job-level
 codes. Operation-level error detail remains in the typed `AIProcessingResult`.
 
 `AIProcessingJobExecutorService` resolves the transcript through the injected
-`TranscriptResolver`, validates meeting/transcript identity, rebuilds the
-existing `ProcessingRequest`, and calls `AIProcessingService`. The direct
-service call remains available, and the executor contains no provider/agent
-logic or persistence dependency.
+`TranscriptInputProvider` port, validates both meeting and transcript identity,
+rebuilds the existing `ProcessingRequest`, and invokes `AIProcessingService`
+once. The shared Phase 7 normalizer preserves canonical segment order, speaker,
+timestamps, language, and job identity. The direct service call remains
+available, and the executor contains no provider/agent logic or persistence
+dependency. Agents, orchestrator, and model provider remain database-unaware.
+
+Meeting Service transcript access enforces ownership with an authenticated
+principal. The in-process submission contract does not yet carry trusted
+principal context, so no provider wiring bypasses that check; safe background
+ownership propagation remains a later integration constraint. Missing or
+invalid transcript input and unexpected provider failures become sanitized
+job failures. Results are not automatically persisted.
 
 `InProcessJobSubmissionPort` is a development/test FIFO queue backed by
 `asyncio.Queue`; submission returns a queued receipt and a caller explicitly
-dispatches work with `run_next()`. It is not a distributed worker system. Jobs
+dispatches work with `run_next()` to the same job executor. It is not a distributed worker system. Jobs
 and outcomes are not durably stored; pending jobs are lost at process exit.
 There are no retries, distributed locking, durable idempotency, or exactly-once
 guarantees. Redis/Celery worker adapters are deferred to Phase 9.

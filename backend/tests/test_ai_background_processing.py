@@ -196,6 +196,120 @@ class AIBackgroundProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.context, job.context)
         self.assertEqual(transcript.id, str(TRANSCRIPT_ID))
 
+    async def test_missing_meeting_or_transcript_is_a_controlled_failure(self):
+        job = self._job()
+        executor, processing_service, resolver = self._executor()
+        resolver.get_transcript.side_effect = self.jobs.TranscriptNotFoundError()
+
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.TRANSCRIPT_NOT_FOUND)
+        self.assertEqual(
+            finished.failure.message,
+            "The requested transcript is unavailable.",
+        )
+        processing_service.process.assert_not_awaited()
+
+    async def test_transcript_for_another_meeting_is_rejected_before_ai(self):
+        job = self._job()
+        executor, processing_service, _ = self._executor(
+            transcript=self._transcript(meeting_id=UUID(int=99))
+        )
+
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.INVALID_INPUT)
+        processing_service.process.assert_not_awaited()
+
+    async def test_unavailable_transcript_has_controlled_safe_failure(self):
+        job = self._job()
+        executor, processing_service, resolver = self._executor()
+        resolver.get_transcript.side_effect = self.jobs.TranscriptUnavailableError(
+            "database details must not escape"
+        )
+
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(
+            finished.failure.code, self.jobs.JobFailureCode.TRANSCRIPT_UNAVAILABLE
+        )
+        self.assertNotIn("database", finished.failure.message)
+        processing_service.process.assert_not_awaited()
+
+    async def test_existing_normalizer_preserves_order_speaker_timestamps_and_language(self):
+        job = self._job()
+        transcript = self._transcript()
+        transcript.segments = [
+            self.transcript_schema.TranscriptSegment(
+                index=2, speaker="Maya", text="Second point", start_ms=200, end_ms=300
+            ),
+            self.transcript_schema.TranscriptSegment(
+                index=1, speaker="Ravi", text="First point", start_ms=100, end_ms=180
+            ),
+        ]
+        transcript.language = "hi"
+        orchestrator = AsyncMock()
+        orchestrator.process.return_value = self.results.ProcessingResult(
+            meeting_id=job.meeting_id,
+            transcript_id=job.transcript_id,
+            requested_operations=job.requested_operations,
+            status=self.contracts.ProcessingStatus.COMPLETED,
+            results=[
+                self.results.OperationResult(
+                    operation=self.contracts.ProcessingOperation.SUMMARY,
+                    status=self.results.OperationStatus.COMPLETED,
+                    output=importlib.import_module("agents.summary_agent").SummaryAgentOutput(
+                        content="Two points were discussed.", key_topics=["planning"]
+                    ),
+                )
+            ],
+        )
+        processing_service = importlib.import_module("app.processing_service").AIProcessingService(
+            orchestrator
+        )
+        resolver = AsyncMock()
+        resolver.get_transcript.return_value = transcript
+        executor = self.jobs.AIProcessingJobExecutorService(processing_service, resolver)
+
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.COMPLETED)
+        orchestrator.process.assert_awaited_once()
+        request, agent_input = orchestrator.process.await_args.args
+        self.assertEqual(request.meeting_id, job.meeting_id)
+        self.assertEqual(request.transcript_id, job.transcript_id)
+        self.assertEqual(agent_input.meeting_id, job.meeting_id)
+        self.assertEqual(agent_input.transcript.transcript_id, job.transcript_id)
+        self.assertEqual(agent_input.transcript.language, "hi")
+        self.assertEqual(
+            [(segment.index, segment.speaker, segment.text,
+              segment.start_ms, segment.end_ms)
+             for segment in agent_input.transcript.segments],
+            [(1, "Ravi", "First point", 100, 180),
+             (2, "Maya", "Second point", 200, 300)],
+        )
+
+    async def test_invalid_transcript_content_does_not_reach_orchestrator(self):
+        job = self._job()
+        transcript = self._transcript()
+        transcript.segments = []
+        orchestrator = AsyncMock()
+        processing_service = importlib.import_module("app.processing_service").AIProcessingService(
+            orchestrator
+        )
+        resolver = AsyncMock()
+        resolver.get_transcript.return_value = transcript
+        executor = self.jobs.AIProcessingJobExecutorService(processing_service, resolver)
+
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.INVALID_INPUT)
+        orchestrator.process.assert_not_awaited()
+
     async def test_partial_processing_result_becomes_partially_failed_job(self):
         job = self._job(requested_operations=["summary", "tasks"])
         executor, _, _ = self._executor(
