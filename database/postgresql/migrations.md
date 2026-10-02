@@ -45,13 +45,14 @@ alembic -c alembic.ini revision --autogenerate -m "describe change"
 
 ## Migration head and local database state
 
-The code migration head is `0004_meeting_domain_results`:
+The code migration head is `0005_meeting_insights`:
 
 ```text
 0001_meetings_transcripts
   → 0002_users
     → 0003_refresh_sessions
       → 0004_meeting_domain_results
+        → 0005_meeting_insights
 ```
 
 `0001_meetings_transcripts` creates the `meeting_status` enum, meeting and
@@ -64,15 +65,24 @@ downgrade.
 At the Phase 4 security-testing checkpoint, the configured local database
 reported `0001_meetings_transcripts`; that was a historical observation. At the
 Phase 5 integration checkpoint, after verifying the local development target,
-`alembic upgrade head` applied the pending migrations. The database now reports
+`alembic upgrade head` applied the pending migrations. The database reported
 `0004_meeting_domain_results (head)`, and `alembic check` found no pending
-upgrade operations.
+upgrade operations at that checkpoint. Phase 7.4 adds revision 0005 in code;
+it has not been run and is pending on that database.
 
 `0004_meeting_domain_results` creates versioned summaries, tasks, decisions,
 and follow-ups with their indexes, foreign keys, and native status enums. Its
-downgrade drops dependent tables/indexes before removing the enums. Meeting
-insight persistence is deferred because the current product/domain contracts do
-not define its row granularity, fields, or versioning behavior.
+downgrade drops dependent tables/indexes before removing the enums.
+
+`0005_meeting_insights` creates one immutable row per insight candidate, with a
+shared native category enum, Meeting cascade foreign key, and a meeting-scope
+index. Its downgrade drops the index and table before the enum. No migration has
+been applied as part of Phase 7.4; PostgreSQL integration remains pending until
+the revision is deliberately applied to a suitable test database.
+
+Meeting insight rows have no run/version/replacement semantics in this phase;
+repeated or duplicate-looking findings are preserved. Processing status,
+versioning, and semantic deduplication remain deferred.
 
 Phase 5 opt-in PostgreSQL integration tests passed (7 total across refresh
 session and Meeting-domain persistence coverage). They confirmed Summary

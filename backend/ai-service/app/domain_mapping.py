@@ -19,6 +19,7 @@ from agents.summary_agent import SummaryAgentOutput
 from agents.task_agent import TaskAgentOutput
 from shared.schemas.decision import DecisionBase
 from shared.schemas.followup import FollowupBase
+from shared.schemas.meeting_insight import MeetingInsightBase
 from shared.schemas.summary import SummaryBase
 from shared.schemas.task import TaskBase
 
@@ -125,9 +126,21 @@ def map_followup_output(
     return followups
 
 
-def map_insight_output(output: InsightAgentOutput) -> InsightAgentOutput:
-    """Validate and retain insights as an application-level result only."""
-    return _validated_output(InsightAgentOutput, output)
+def map_insight_output(
+    output: InsightAgentOutput, *, meeting_id: UUID | str
+) -> list[MeetingInsightBase]:
+    """Map each validated candidate to an input for the insight domain."""
+    value = _validated_output(InsightAgentOutput, output)
+    trusted_id = _trusted_meeting_id(meeting_id)
+    return [
+        MeetingInsightBase(
+            meeting_id=trusted_id,
+            category=item.category,
+            title=item.title,
+            description=item.description,
+        )
+        for item in value.insights
+    ]
 
 
 __all__ = [

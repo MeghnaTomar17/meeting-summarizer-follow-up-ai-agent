@@ -1,17 +1,18 @@
 # PostgreSQL Tables
 
 > `users`, `refresh_sessions`, `meetings`, `transcripts`, `summaries`, `tasks`,
-> `decisions`, and `followups` are implemented by ORM models in
+> `decisions`, `followups`, and `meeting_insights` are implemented by ORM models in
 > `backend/shared/database/models/`; API DTOs remain in `backend/shared/schemas/`.
 
 ## Implemented schema
 
 The migration chain implements `users`, `refresh_sessions`, `meetings`,
-`transcripts`, `summaries`, `tasks`, `decisions`, and `followups`, plus the
-`meeting_status`, `task_status`, and `followup_status` enums. After the Phase 5
-development synchronization, the configured local database reports
-`0004_meeting_domain_results (head)`; `alembic check` found no schema changes
-pending.
+`transcripts`, `summaries`, `tasks`, `decisions`, `followups`, and
+`meeting_insights`, plus the `meeting_status`, `task_status`, `followup_status`,
+and `meeting_insight_category` enums. The configured local database was
+verified at `0004_meeting_domain_results (head)` after the Phase 5
+synchronization. Revision `0005_meeting_insights` is now the code head and has
+not been applied; that database therefore has the new insight schema pending.
 
 ### meeting_status enum
 
@@ -21,6 +22,12 @@ Ordered values: `pending`, `processing`, `ready`, `failed`.
 
 `task_status`: `open`, `in_progress`, `done`, `cancelled`.
 `followup_status`: `draft`, `scheduled`, `sent`, `failed`.
+
+### meeting_insight_category enum
+
+Ordered values: `risk`, `blocker`, `concern`, `opportunity`, `dependency`,
+`unresolved`, `disagreement`, `observation`. The shared `InsightCategory`
+contract supplies the same values to AI validation and ORM persistence.
 
 ## Implemented tables
 
@@ -79,6 +86,13 @@ database and was validated by PostgreSQL integration tests.
 - **Key columns:** `id` (UUID PK), `meeting_id` (FK, cascade delete), `subject`, `body_html`, `recipients` (JSONB email list), `status` (`followup_status`, default `draft`), nullable `scheduled_at` and `sent_at`, `created_at`.
 - **Cardinality:** A meeting has zero or many follow-ups; no unique draft-per-meeting constraint is imposed.
 
+### meeting_insights
+
+- **Purpose:** Persist one qualitative Insight Agent candidate per row.
+- **Key columns:** `id` (UUID PK), `meeting_id` (FK, cascade delete), `category` (`meeting_insight_category`), `title`, `description`, and `created_at`.
+- **Cardinality/lifecycle:** A meeting has zero or many insights. Rows are immutable snapshots with no update/status/version fields. Regeneration may add another row; replacement and semantic deduplication are deferred to a later processing policy.
+- **Constraints:** No uniqueness constraint on category/title; similar findings from separate runs remain separate. Meeting ownership is inherited through `meeting_id`.
+
 ## Planned tables (not implemented)
 
 ### organizations
@@ -86,9 +100,8 @@ database and was validated by PostgreSQL integration tests.
 - **Purpose:** Multi-tenant workspace boundary.
 - **Key columns:** `id` (UUID PK), `name`, `slug` (unique), `created_at`.
 
-### meeting_insights (design deferred)
+### meeting_insights
 
-The roadmap identifies insight categories but does not define whether a row
-represents an analysis run, one metric/category, or an individual finding. It
-also does not define output fields or replacement/versioning rules. No table is
-created until those domain semantics are specified.
+Implemented by revision `0005_meeting_insights`, one row per typed candidate.
+There is no run record, processing status, version, or semantic replacement
+policy in this phase; repeated candidates are preserved as separate rows.

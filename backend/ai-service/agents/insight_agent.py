@@ -3,26 +3,12 @@
 from __future__ import annotations
 
 import json
-from enum import StrEnum
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agents.base import Agent
 from app.contracts import AgentInput, AgentKind, ModelRequest
 from llm.provider import ModelProvider
-
-
-class InsightCategory(StrEnum):
-    """Controlled categories for meaningful, transcript-grounded observations."""
-
-    RISK = "risk"
-    BLOCKER = "blocker"
-    CONCERN = "concern"
-    OPPORTUNITY = "opportunity"
-    DEPENDENCY = "dependency"
-    UNRESOLVED = "unresolved"
-    DISAGREEMENT = "disagreement"
-    OBSERVATION = "observation"
+from shared.schemas.meeting_insight import InsightCategory
 
 
 class InsightCandidate(BaseModel):

@@ -29,7 +29,7 @@ PostgreSQL
 
 **Current ownership:** gateway-service initializes PostgreSQL for users and
 refresh sessions; meeting-service initializes it for meetings, transcripts,
-summaries, tasks, decisions, and follow-ups. Both use the shared async
+summaries, tasks, decisions, follow-ups, and meeting insights. Both use the shared async
 engine/session infrastructure and canonical Alembic schema.
 
 ## Engine vs session
@@ -105,11 +105,21 @@ the contract's `created_at`, schedule, and send timestamps. Statuses use native
 PostgreSQL enums whose values match the Pydantic contracts. JSONB holds the
 existing list-shaped `key_topics`, `participants`, and `recipients` values.
 
-The roadmap's MeetingInsight concept is not yet a defined row-level contract:
-its current prompt describes broad analytical categories but does not specify
-whether persistence is per analysis run, per category, or per finding, nor a
-version/replacement policy. Its schema is deliberately deferred until those
-semantics are decided.
+Phase 7.4 defines MeetingInsight as one row per typed insight candidate
+(`category`, `title`, `description`). Meeting has zero or many insights. Rows
+have UUID identity and `created_at`, cascade with Meeting deletion, and have no
+update/status/version lifecycle. The shared category enum controls AI
+validation and PostgreSQL values. Regeneration can create another row; similar
+findings are not deduplicated or replaced. Those processing policies remain
+deferred.
+
+The application mapper produces `MeetingInsightBase` values with a trusted
+meeting ID; the model assigns its UUID and database timestamp. The
+`MeetingInsightRepository` provides create, get-by-ID, and meeting-scoped list
+queries, flushing writes without committing. No service or public route is
+introduced in this persistence-only block. Revision `0005_meeting_insights`
+defines the schema but remains unapplied pending deliberate PostgreSQL
+integration.
 
 ### Result indexes and query behavior
 
@@ -117,6 +127,7 @@ semantics are decided.
 - `ix_summaries_meeting_version_desc`: meeting/version descending lookup.
 - `ix_tasks_meeting_status`, `ix_tasks_assignee_status`: Task filtering.
 - `ix_decisions_meeting_id`, `ix_followups_meeting_id`: meeting-scoped lists.
+- `ix_meeting_insights_meeting_id`: meeting-scoped insight listing.
 - Meeting foreign keys cascade deletes; the Task assignee foreign key sets the
   reference to `NULL` when a User is deleted.
 - `0004_meeting_domain_results` defines `ck_summaries_version_positive` and

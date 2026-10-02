@@ -4,7 +4,7 @@ AI-powered meeting intelligence: transcripts, summaries, action items, decisions
 
 ## Status
 
-**Current checkpoint: Phase 6 complete** — Phase 6 adds a provider-independent AI Service foundation with typed processing contracts, a shared agent architecture, five transcript-grounded agents, deterministic orchestration, structured-output validation, and sanitized failures. The Meeting domain continues to own persisted meetings, transcripts, summaries, tasks, decisions, and follow-up drafts. No real model provider, AI-result persistence mapping, MeetingInsight persistence model, or production pipeline integration is implemented. Public organization-wide Meeting listing and Docker deployment/testing remain deferred. See [the current architecture and Phase 6 checkpoint](docs/architecture/project-foundation.md).
+**Current checkpoint: Phase 7.5 — AI Processing Service Contract.** Phases 0–6 are complete. Phase 7.1 added the OpenAI provider adapter; 7.2 transcript normalization; 7.3 domain mapping; 7.4 MeetingInsight persistence model and repository with migration `0005` defined but unapplied; and 7.5 an application service that returns domain-ready outputs with operation-level failures and performs no persistence. Public processing routes, background execution, and production pipeline integration remain deferred. See the [AI processing architecture](docs/architecture/overview.md) and [Phase 6 foundation checkpoint](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 

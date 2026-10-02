@@ -103,3 +103,8 @@ class Meeting(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="meeting",
         cascade="all, delete-orphan",
     )
+    insights: Mapped[list["MeetingInsight"]] = relationship(
+        "MeetingInsight",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+    )

@@ -3,7 +3,8 @@
 > The user/session entries are created by revisions `0002_users` and
 > `0003_refresh_sessions`; meeting/transcript entries are created by
 > `0001_meetings_transcripts`; Phase 5 result-table indexes are created by
-> `0004_meeting_domain_results`, applied to the configured development DB.
+> `0004_meeting_domain_results` (applied to the configured development DB).
+> The `0005_meeting_insights` index is defined in code and remains unapplied.
 
 | Table       | Index fields                    | Type     | Notes                        |
 |-------------|---------------------------------|----------|------------------------------|
@@ -20,6 +21,7 @@
 | tasks       | assignee_id, status (`ix_tasks_assignee_status`) | BTREE | My tasks view |
 | decisions   | meeting_id (`ix_decisions_meeting_id`) | BTREE | Decision timeline |
 | followups   | meeting_id (`ix_followups_meeting_id`) | BTREE | Follow-up drafts |
+| meeting_insights | meeting_id (`ix_meeting_insights_meeting_id`) | BTREE | Meeting-scoped insight listing |
 
 <!-- TODO: GIN index on transcripts.segments for JSONB search if needed -->
 <!-- TODO: pg_trgm extension for fuzzy title search -->

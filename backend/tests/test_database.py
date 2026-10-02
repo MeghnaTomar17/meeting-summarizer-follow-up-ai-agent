@@ -233,6 +233,7 @@ class DatabaseFoundationTestCase(unittest.TestCase):
                 "tasks",
                 "decisions",
                 "followups",
+                "meeting_insights",
             },
         )
         self.assertEqual(Meeting.__table__.c.status.type.enums, [

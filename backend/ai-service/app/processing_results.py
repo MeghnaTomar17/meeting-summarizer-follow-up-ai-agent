@@ -23,6 +23,11 @@ from llm.errors import (
     ProviderNotConfiguredError,
     UnexpectedModelProviderError,
 )
+from shared.schemas.decision import DecisionBase
+from shared.schemas.followup import FollowupBase
+from shared.schemas.meeting_insight import MeetingInsightBase
+from shared.schemas.summary import SummaryBase
+from shared.schemas.task import TaskBase
 
 AgentOutput = (
     SummaryAgentOutput
@@ -45,6 +50,8 @@ class ProcessingErrorCode(StrEnum):
     PROVIDER_REJECTED = "provider_rejected"
     MALFORMED_OUTPUT = "malformed_output"
     MODEL_EXECUTION_FAILED = "model_execution_failed"
+    INVALID_INPUT = "invalid_input"
+    DOMAIN_MAPPING_FAILED = "domain_mapping_failed"
     UNEXPECTED_FAILURE = "unexpected_failure"
 
 
@@ -125,6 +132,104 @@ class ProcessingResult(BaseModel):
         return self
 
 
+class TaskDomainInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    items: list[TaskBase]
+
+
+class DecisionDomainInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    items: list[DecisionBase]
+
+
+class FollowupDomainInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    items: list[FollowupBase]
+
+
+class InsightDomainInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    items: list[MeetingInsightBase]
+
+
+MappedOutput = (
+    SummaryBase
+    | TaskDomainInputs
+    | DecisionDomainInputs
+    | FollowupDomainInputs
+    | InsightDomainInputs
+)
+
+
+class MappedOperationResult(BaseModel):
+    """One orchestration result after safe application/domain mapping."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    operation: ProcessingOperation
+    status: OperationStatus
+    output: MappedOutput | None = None
+    error: ProcessingFailure | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome_shape(self) -> "MappedOperationResult":
+        if self.status == OperationStatus.FAILED:
+            if self.output is not None or self.error is None:
+                raise ValueError("Failed operations require an error and no output.")
+            return self
+        if self.output is None or self.error is not None:
+            raise ValueError("Completed operations require output and no error.")
+
+        expected = {
+            ProcessingOperation.SUMMARY: SummaryBase,
+            ProcessingOperation.TASKS: TaskDomainInputs,
+            ProcessingOperation.DECISIONS: DecisionDomainInputs,
+            ProcessingOperation.FOLLOW_UPS: FollowupDomainInputs,
+            ProcessingOperation.INSIGHTS: InsightDomainInputs,
+        }[self.operation]
+        if type(self.output) is not expected:
+            raise ValueError("Mapped output does not match its operation.")
+        return self
+
+
+class AIProcessingResult(BaseModel):
+    """Application result with domain-ready inputs and no persistence effects."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    meeting_id: UUID
+    transcript_id: UUID
+    requested_operations: list[ProcessingOperation] = Field(min_length=1)
+    status: ProcessingStatus
+    results: list[MappedOperationResult] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_requested_operation_outcomes(self) -> "AIProcessingResult":
+        if len(set(self.requested_operations)) != len(self.requested_operations):
+            raise ValueError("Requested operations must be unique.")
+        operations = [result.operation for result in self.results]
+        if operations != self.requested_operations:
+            raise ValueError("Results must match requested operations in order.")
+        successes = sum(
+            result.status == OperationStatus.COMPLETED for result in self.results
+        )
+        failures = len(self.results) - successes
+        expected_status = (
+            ProcessingStatus.COMPLETED
+            if failures == 0
+            else ProcessingStatus.FAILED
+            if successes == 0
+            else ProcessingStatus.PARTIALLY_FAILED
+        )
+        if self.status != expected_status:
+            raise ValueError("Overall status does not match operation outcomes.")
+        return self
+
+
 def failure_for_exception(error: Exception) -> ProcessingFailure:
     """Map known agent/provider failures to safe public codes and messages."""
     if isinstance(error, ProviderNotConfiguredError):
@@ -154,6 +259,13 @@ __all__ = [
     "AgentOutput",
     "OperationResult",
     "OperationStatus",
+    "MappedOutput",
+    "TaskDomainInputs",
+    "DecisionDomainInputs",
+    "FollowupDomainInputs",
+    "InsightDomainInputs",
+    "MappedOperationResult",
+    "AIProcessingResult",
     "ProcessingErrorCode",
     "ProcessingFailure",
     "ProcessingResult",

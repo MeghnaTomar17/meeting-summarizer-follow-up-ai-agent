@@ -1,12 +1,12 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — current architecture through Phase 6.
+> MannerAI Meetings Platform — AI processing boundary through Phase 7.5.
 
 **Entry point:** For the consolidated current reference and Phase 6 checkpoint, see [project-foundation.md](./project-foundation.md).
 
 ## System context
 
-The platform persists meetings, transcripts, and meeting results behind a Gateway and Meeting Service. The AI Service now contains a provider-independent foundation for transcript-grounded summaries and extractions. Live model-provider execution, result persistence mapping, semantic indexing, and the frontend workflow are not yet integrated.
+The platform persists meetings, transcripts, and meeting results behind a Gateway and Meeting Service. The AI Service accepts a trusted processing request and caller-loaded transcript, normalizes transcript data, invokes the existing orchestrator, and returns typed domain-ready outputs with operation-level failures. The processing boundary does not load records or persist results; its caller decides when to invoke domain services. The OpenAI provider adapter exists, while public processing routes, background execution, semantic indexing, and frontend workflows remain deferred.
 
 ## Microservices
 
@@ -14,7 +14,7 @@ The platform persists meetings, transcripts, and meeting results behind a Gatewa
 |---------|----------------|
 | gateway-service | Auth, routing, validation, public API |
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
-| ai-service | Typed processing contracts, five agents, provider abstraction, and deterministic orchestration; no real provider or persistence integration |
+| ai-service | AIProcessingService, transcript normalization, five agents, OpenAI provider adapter, deterministic orchestration, and typed domain mapping; no database or persistence side effects |
 | search-service | Health service; chunking, embeddings, and Qdrant retrieval remain deferred |
 | worker-service | Health service; Celery background execution remains deferred |
 
@@ -29,7 +29,8 @@ The platform persists meetings, transcripts, and meeting results behind a Gatewa
 - **SQLAlchemy 2.0 async** + **asyncpg** for PostgreSQL access
 - **Alembic** for schema migrations (see `database/postgresql/migrations.md`)
 - **Pydantic schemas** in `backend/shared/schemas/` for shared API/domain DTOs
-- **SQLAlchemy ORM models** in `backend/shared/database/models/` for users, refresh sessions, meetings, transcripts, summaries, tasks, decisions, and follow-ups
+- **SQLAlchemy ORM models** in `backend/shared/database/models/` for users, refresh sessions, meetings, transcripts, summaries, tasks, decisions, follow-ups, and meeting insights
+- Migration `0005_meeting_insights` is defined but unapplied; no migration is run by the AI processing service
 
 ## Logging
 
@@ -55,7 +56,7 @@ The platform persists meetings, transcripts, and meeting results behind a Gatewa
 - Async SQLAlchemy 2.x + asyncpg (see `docs/architecture/database.md`)
 - Shared infrastructure in `backend/shared/database/`
 - Alembic migrations at `backend/migrations/`
-- gateway-service owns user and refresh-session persistence; meeting-service owns meeting, transcript, and result persistence
+- gateway-service owns user and refresh-session persistence; meeting-service owns meeting, transcript, and result persistence, including MeetingInsight rows
 
 ## Public authentication boundary
 
@@ -120,7 +121,6 @@ For the detailed, current reference see [project-foundation.md](./project-founda
 
 - Sequence diagrams for upload → process → index flow
 - Organization membership and authorization for organization-wide listing
-- Real `ModelProvider` implementation and provider-specific integration
-- Mapping AI outputs to Meeting Service persistence contracts; MeetingInsight persistence design
+- Public AI processing API and persistence invocation policy
 - Production pipeline/Gateway integration, background processing, Redis/Celery, semantic search, and frontend integration
 - Docker/infrastructure work and later Phase 7+ roadmap work

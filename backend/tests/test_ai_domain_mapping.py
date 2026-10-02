@@ -139,9 +139,29 @@ class AIDomainMappingTests(unittest.TestCase):
             self.mapping.map_followup_output(output, meeting_id=MEETING_ID)
 
     def test_insights_remain_typed_application_results(self) -> None:
+        output = self.insight.InsightAgentOutput(
+            insights=[
+                self.insight.InsightCandidate(
+                    category=self.insight.InsightCategory.RISK,
+                    title="Review may slip",
+                    description="The review is not scheduled.",
+                )
+            ]
+        )
+        results = self.mapping.map_insight_output(output, meeting_id=MEETING_ID)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].meeting_id, str(MEETING_ID))
+        self.assertEqual(results[0].category, self.insight.InsightCategory.RISK)
+        self.assertEqual(results[0].title, "Review may slip")
+        self.assertEqual(results[0].description, "The review is not scheduled.")
+        self.assertNotIn("id", results[0].model_fields)
+        self.assertNotIn("created_at", results[0].model_fields)
+
+    def test_empty_insight_output_maps_to_no_domain_rows(self) -> None:
         output = self.insight.InsightAgentOutput(insights=[])
-        self.assertIs(self.mapping.map_insight_output(output).__class__, type(output))
-        self.assertFalse(hasattr(self.mapping, "MeetingInsight"))
+        self.assertEqual(
+            self.mapping.map_insight_output(output, meeting_id=MEETING_ID), []
+        )
 
     def test_unexpected_or_malformed_output_and_bad_trusted_context_are_rejected(self) -> None:
         with self.assertRaises(self.mapping.AIOutputMappingError):
