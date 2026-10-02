@@ -82,13 +82,30 @@ preserves segment order, speaker, timestamps, language, and trusted IDs.
 Agents and the AI service remain unaware of ORM/database access. The AI result
 contains domain-ready inputs but is not automatically persisted.
 
-Meeting Service transcript access currently checks ownership through an
-authenticated principal. There is not yet a trusted principal context in the
-background submission contract, so a production provider must be wired only
-when that identity can be propagated through the existing ownership mechanism;
-the job boundary does not bypass it. Provider not-found, invalid transcript,
-and unexpected execution failures produce controlled job failures without
-exposing database exception details.
+Gateway's `get_trusted_execution_context` depends on `get_current_user`, which
+validates the access token and loads the persisted user. It issues a frozen
+`TrustedExecutionContext` containing only the user UUID and an opaque context
+binding ID. `AIProcessingJob.from_authenticated_context()` binds both values
+to the job; substitutions to either the context or its principal are rejected.
+The job has no arbitrary `user_id` input. The executor passes the
+same context to `MeetingServiceTranscriptInputProvider`, which delegates to
+`MeetingService.get_transcript()`. The existing service enforces ownership
+through `require_owned_meeting()` before reading the transcript. The provider
+then verifies the requested transcript ID. A missing context fails the job;
+a different user's context is rejected by the existing ownership check. AI
+services/agents receive no authentication context.
+
+This adds no token format and performs no JWT validation in AI code. Existing
+Gateway-to-Meeting HTTP calls continue to use the Gateway-signed internal
+principal; the in-process provider passes the already-established user UUID to
+the existing application service.
+
+Security invariant: **Background execution must preserve the authenticated
+principal established by the trusted application boundary; it must never
+derive authorization identity from arbitrary job payload data.** Public input
+schemas must not accept this internal context. Phase 9 queue consumers must
+accept identity only from the trusted producer channel and must never accept
+client-supplied user IDs or credentials as authorization authority.
 
 `InProcessJobSubmissionPort` is a FIFO `asyncio.Queue` that accepts a job and
 returns a queued receipt; tests/development explicitly dispatch one job with
@@ -98,6 +115,14 @@ deduplication are absent, and exactly-once execution is not guaranteed. The
 existing direct `AIProcessingService` call remains available. Redis/Celery
 adapters and worker execution belong to Phase 9; no public job endpoint is
 introduced here.
+
+For Phase 9, the queue payload will need the authenticated user UUID together
+with the job's meeting/transcript IDs and requested operations. It must not
+contain access/refresh tokens, passwords, provider credentials, or a principal
+selected from client data. The worker must establish that the payload came
+from the trusted submission boundary before creating its in-process execution
+context; the current context issuance marker is intentionally not a serialized
+credential.
 
 ## Microservices
 

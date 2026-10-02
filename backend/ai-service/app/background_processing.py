@@ -21,6 +21,7 @@ from app.processing_results import (
     ProcessingFailure,
 )
 from app.processing_service import AIProcessingService
+from shared.security.execution_context import TrustedExecutionContext
 from shared.schemas.transcript import TranscriptInDB
 
 
@@ -36,6 +37,7 @@ class JobFailureCode(StrEnum):
     INVALID_INPUT = "invalid_input"
     TRANSCRIPT_NOT_FOUND = "transcript_not_found"
     TRANSCRIPT_UNAVAILABLE = "transcript_unavailable"
+    EXECUTION_CONTEXT_REQUIRED = "execution_context_required"
     AI_PROCESSING_FAILED = "ai_processing_failed"
     DOMAIN_MAPPING_FAILED = "domain_mapping_failed"
     EXECUTION_FAILED = "execution_failed"
@@ -45,6 +47,7 @@ _SAFE_FAILURE_MESSAGES = {
     JobFailureCode.INVALID_INPUT: "The processing job input is invalid.",
     JobFailureCode.TRANSCRIPT_NOT_FOUND: "The requested transcript is unavailable.",
     JobFailureCode.TRANSCRIPT_UNAVAILABLE: "The requested transcript is unavailable.",
+    JobFailureCode.EXECUTION_CONTEXT_REQUIRED: "An authenticated execution context is required.",
     JobFailureCode.AI_PROCESSING_FAILED: "AI processing failed for all requested operations.",
     JobFailureCode.DOMAIN_MAPPING_FAILED: "AI results could not be mapped to domain inputs.",
     JobFailureCode.EXECUTION_FAILED: "The processing job could not be executed.",
@@ -73,6 +76,9 @@ class AIProcessingJob(BaseModel):
     meeting_id: UUID
     transcript_id: UUID
     requested_operations: list[ProcessingOperation] = Field(min_length=1)
+    execution_context: TrustedExecutionContext | None = None
+    execution_context_id: UUID | None = None
+    execution_principal_id: UUID | None = None
     context: dict[str, str] | None = None
     status: AIProcessingJobStatus = AIProcessingJobStatus.QUEUED
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -99,6 +105,18 @@ class AIProcessingJob(BaseModel):
 
     @model_validator(mode="after")
     def validate_lifecycle_snapshot(self) -> "AIProcessingJob":
+        if self.execution_context is None:
+            if self.execution_context_id is not None or self.execution_principal_id is not None:
+                raise ValueError("An execution-context binding requires a context.")
+        else:
+            if not self.execution_context.was_issued_by_authenticated_boundary:
+                raise ValueError("Execution context must come from the authenticated boundary.")
+            if (
+                self.execution_context_id != self.execution_context.context_id
+                or self.execution_principal_id != self.execution_context.user_id
+            ):
+                raise ValueError("The execution context does not match its job binding.")
+
         if self.started_at is not None and self.started_at < self.created_at:
             raise ValueError("Job start time cannot precede creation time.")
         if self.completed_at is not None and (
@@ -140,6 +158,34 @@ class AIProcessingJob(BaseModel):
             ):
                 raise ValueError("Failed job processing results must represent total failure.")
         return self
+
+    @classmethod
+    def from_authenticated_context(
+        cls,
+        *,
+        meeting_id: UUID,
+        transcript_id: UUID,
+        requested_operations: list[ProcessingOperation],
+        execution_context: TrustedExecutionContext,
+        context: dict[str, str] | None = None,
+        created_at: datetime | None = None,
+    ) -> "AIProcessingJob":
+        """Build an executable job from a context issued by Gateway auth."""
+        if (
+            not isinstance(execution_context, TrustedExecutionContext)
+            or not execution_context.was_issued_by_authenticated_boundary
+        ):
+            raise TypeError("A trusted execution context is required.")
+        return cls(
+            meeting_id=meeting_id,
+            transcript_id=transcript_id,
+            requested_operations=requested_operations,
+            execution_context=execution_context,
+            execution_context_id=execution_context.context_id,
+            execution_principal_id=execution_context.user_id,
+            context=context,
+            **({"created_at": created_at} if created_at is not None else {}),
+        )
 
     def start(self, *, at: datetime | None = None) -> "AIProcessingJob":
         if self.status != AIProcessingJobStatus.QUEUED:
@@ -216,6 +262,10 @@ class AIProcessingJob(BaseModel):
 
     def _copy_with(self, **updates: object) -> "AIProcessingJob":
         data = self.model_dump()
+        # Keep the non-serializable issuance marker attached to the immutable
+        # context object while validating lifecycle transitions.
+        if self.execution_context is not None:
+            data["execution_context"] = self.execution_context
         data.update(updates)
         return AIProcessingJob.model_validate(data)
 
@@ -226,6 +276,10 @@ class InvalidJobTransitionError(ValueError):
 
 class InvalidJobInputError(ValueError):
     """A job cannot be safely resolved to its requested transcript input."""
+
+
+class InvalidExecutionContextError(ValueError):
+    """The execution context does not match the context bound to the job."""
 
 
 class TranscriptResolutionError(Exception):
@@ -252,7 +306,10 @@ class TranscriptInputProvider(Protocol):
     """
 
     async def get_transcript(
-        self, meeting_id: UUID, transcript_id: UUID
+        self,
+        meeting_id: UUID,
+        transcript_id: UUID,
+        execution_context: TrustedExecutionContext,
     ) -> TranscriptInDB: ...
 
 
@@ -276,10 +333,24 @@ class AIProcessingJobExecutorService:
         self._transcript_resolver = transcript_resolver
 
     async def execute(self, job: AIProcessingJob) -> AIProcessingJob:
+        if (
+            job.execution_context is not None
+            and (
+                job.execution_context_id != job.execution_context.context_id
+                or job.execution_principal_id != job.execution_context.user_id
+            )
+        ):
+            raise InvalidExecutionContextError(
+                "Execution context does not match the job binding."
+            )
         running = job.start()
+        if job.execution_context is None:
+            return running.fail(JobFailureCode.EXECUTION_CONTEXT_REQUIRED)
         try:
             transcript = await self._transcript_resolver.get_transcript(
-                job.meeting_id, job.transcript_id
+                job.meeting_id,
+                job.transcript_id,
+                job.execution_context,
             )
             self._validate_transcript(job, transcript)
             request = ProcessingRequest(
@@ -377,6 +448,7 @@ __all__ = [
     "AIProcessingJob",
     "InvalidJobTransitionError",
     "InvalidJobInputError",
+    "InvalidExecutionContextError",
     "TranscriptResolutionError",
     "NoQueuedJobError",
     "TranscriptInputProvider",

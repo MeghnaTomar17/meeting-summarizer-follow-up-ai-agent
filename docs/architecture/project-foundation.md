@@ -800,21 +800,45 @@ rebuilds the existing `ProcessingRequest`, and invokes `AIProcessingService`
 once. The shared Phase 7 normalizer preserves canonical segment order, speaker,
 timestamps, language, and job identity. The direct service call remains
 available, and the executor contains no provider/agent logic or persistence
-dependency. Agents, orchestrator, and model provider remain database-unaware.
+dependency. Agents, orchestrator, and model provider remain database-unaware
+and receive no authentication context.
 
-Meeting Service transcript access enforces ownership with an authenticated
-principal. The in-process submission contract does not yet carry trusted
-principal context, so no provider wiring bypasses that check; safe background
-ownership propagation remains a later integration constraint. Missing or
-invalid transcript input and unexpected provider failures become sanitized
-job failures. Results are not automatically persisted.
+Gateway's trusted execution-context dependency is downstream of
+`get_current_user()`: it accepts the persisted `User` row returned after token
+validation and issues a frozen context containing only the authenticated user
+UUID and an opaque binding ID. `AIProcessingJob.from_authenticated_context()`
+binds both the context ID and principal UUID to the job, so changing either
+after construction is rejected; there is no arbitrary job `user_id` field or
+public request schema for this internal context. The executor passes the bound
+context to the Meeting Service transcript provider. That provider calls
+`MeetingService.get_transcript` with the context user UUID, so the existing
+`require_owned_meeting()` remains the authority for access. It also checks the
+requested transcript ID. Missing context fails safely; a changed context
+binding is rejected before resolution; a wrong principal reaches the existing
+ownership check and never reaches AI. No new token format or AI-side JWT
+validation is introduced; existing Gateway-signed internal principals remain
+the mechanism for internal HTTP calls.
+
+Security invariant: **Background execution must preserve the authenticated
+principal established by the trusted application boundary; it must never
+derive authorization identity from arbitrary job payload data.** No access or
+refresh tokens, passwords, password hashes, or provider credentials are
+carried in the context/job. Results are not automatically persisted.
 
 `InProcessJobSubmissionPort` is a development/test FIFO queue backed by
 `asyncio.Queue`; submission returns a queued receipt and a caller explicitly
-dispatches work with `run_next()` to the same job executor. It is not a distributed worker system. Jobs
-and outcomes are not durably stored; pending jobs are lost at process exit.
+dispatches work with `run_next()` to the same job executor. It is not a
+distributed worker system. Jobs and outcomes are not durably stored; pending
+jobs are lost at process exit.
 There are no retries, distributed locking, durable idempotency, or exactly-once
 guarantees. Redis/Celery worker adapters are deferred to Phase 9.
+
+Phase 9's queue payload must carry the authenticated user UUID with the meeting
+and transcript IDs and requested operations, and the worker must only accept
+messages from the trusted producer boundary. Client-supplied identity fields
+and credentials must never be treated as trusted. The current process-local
+context issuance marker is not a serialized credential; the Phase 9 boundary
+must establish producer authenticity before recreating a trusted context.
 
 ## Phase 3 persistence architecture (historical baseline)
 

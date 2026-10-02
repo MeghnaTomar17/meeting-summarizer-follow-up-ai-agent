@@ -15,6 +15,7 @@ from app.repositories.user_repository import UserRepository
 from shared.database.models.user import User
 from shared.database.session import get_db_session
 from shared.exceptions.common import UnauthorizedError
+from shared.security.execution_context import TrustedExecutionContext
 
 security = HTTPBearer(auto_error=False)
 
@@ -47,3 +48,10 @@ async def get_current_user(
     if user is None:
         raise UnauthorizedError()
     return user
+
+
+async def get_trusted_execution_context(
+    current_user: User = Depends(get_current_user),
+) -> TrustedExecutionContext:
+    """Carry only the identity established by Gateway authentication downstream."""
+    return TrustedExecutionContext._issue_from_authenticated_user_id(current_user.id)

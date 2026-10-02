@@ -41,6 +41,15 @@ class AIBackgroundProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.results = importlib.import_module("app.processing_results")
         self.transcript_schema = importlib.import_module("shared.schemas.transcript")
         self.summary_schema = importlib.import_module("shared.schemas.summary")
+        self.execution_context_schema = importlib.import_module(
+            "shared.security.execution_context"
+        )
+        self.execution_context = self._execution_context(UUID(int=9001))
+
+    def _execution_context(self, user_id):
+        return self.execution_context_schema.TrustedExecutionContext._issue_from_authenticated_user_id(
+            user_id
+        )
 
     def _job(self, **updates):
         values = {
@@ -50,7 +59,10 @@ class AIBackgroundProcessingTests(unittest.IsolatedAsyncioTestCase):
             "context": {"project": "launch"},
         }
         values.update(updates)
-        return self.jobs.AIProcessingJob(**values)
+        execution_context = values.pop("execution_context", self.execution_context)
+        return self.jobs.AIProcessingJob.from_authenticated_context(
+            **values, execution_context=execution_context
+        )
 
     def _transcript(self, *, meeting_id=MEETING_ID, transcript_id=TRANSCRIPT_ID):
         now = datetime(2026, 10, 2, tzinfo=timezone.utc)
@@ -187,7 +199,9 @@ class AIBackgroundProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished.job_id, job.job_id)
         self.assertEqual(finished.meeting_id, MEETING_ID)
         self.assertEqual(finished.transcript_id, TRANSCRIPT_ID)
-        resolver.get_transcript.assert_awaited_once_with(MEETING_ID, TRANSCRIPT_ID)
+        resolver.get_transcript.assert_awaited_once_with(
+            MEETING_ID, TRANSCRIPT_ID, job.execution_context
+        )
         processing_service.process.assert_awaited_once()
         request, transcript = processing_service.process.await_args.args
         self.assertEqual(request.meeting_id, MEETING_ID)
@@ -309,6 +323,115 @@ class AIBackgroundProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
         self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.INVALID_INPUT)
         orchestrator.process.assert_not_awaited()
+
+    async def test_missing_execution_context_fails_before_transcript_or_ai_access(self):
+        job = self.jobs.AIProcessingJob(
+            meeting_id=MEETING_ID,
+            transcript_id=TRANSCRIPT_ID,
+            requested_operations=["summary"],
+        )
+        executor, processing_service, resolver = self._executor(result=self._result(job))
+
+        finished = await executor.execute(job)
+
+        self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
+        self.assertEqual(
+            finished.failure.code,
+            self.jobs.JobFailureCode.EXECUTION_CONTEXT_REQUIRED,
+        )
+        resolver.get_transcript.assert_not_awaited()
+        processing_service.process.assert_not_awaited()
+
+    async def test_context_is_frozen_and_substitution_is_rejected(self):
+        job = self._job()
+        other_context = self._execution_context(UUID(int=9002))
+        substituted = job.model_copy(
+            update={"execution_context": other_context}, deep=True
+        )
+        executor, processing_service, resolver = self._executor(result=self._result(job))
+        with self.assertRaises(self.jobs.InvalidExecutionContextError):
+            await executor.execute(substituted)
+        resolver.get_transcript.assert_not_awaited()
+        processing_service.process.assert_not_awaited()
+
+        same_context_id_other_user = job.execution_context.model_copy(
+            update={"user_id": UUID(int=9003)}
+        )
+        substituted_principal = job.model_copy(
+            update={"execution_context": same_context_id_other_user}, deep=True
+        )
+        with self.assertRaises(self.jobs.InvalidExecutionContextError):
+            await executor.execute(substituted_principal)
+        resolver.get_transcript.assert_not_awaited()
+        processing_service.process.assert_not_awaited()
+        with self.assertRaises(ValidationError):
+            other_context.user_id = UUID(int=9003)
+
+    async def test_client_data_cannot_issue_context_and_context_has_no_credentials(self):
+        Context = self.execution_context_schema.TrustedExecutionContext
+        with self.assertRaises(TypeError):
+            Context._issue_from_authenticated_user_id("9004")
+        with self.assertRaises(TypeError):
+            self.jobs.AIProcessingJob.from_authenticated_context(
+                meeting_id=MEETING_ID,
+                transcript_id=TRANSCRIPT_ID,
+                requested_operations=["summary"],
+                execution_context=self.execution_context,
+                user_id=UUID(int=9004),
+            )
+        unissued_context = Context(user_id=UUID(int=9004))
+        with self.assertRaises(TypeError):
+            self.jobs.AIProcessingJob.from_authenticated_context(
+                meeting_id=MEETING_ID,
+                transcript_id=TRANSCRIPT_ID,
+                requested_operations=["summary"],
+                execution_context=unissued_context,
+            )
+        with self.assertRaises(ValidationError):
+            self.jobs.AIProcessingJob(
+                meeting_id=MEETING_ID,
+                transcript_id=TRANSCRIPT_ID,
+                requested_operations=["summary"],
+                execution_context={
+                    "user_id": str(UUID(int=9004)),
+                    "context_id": str(UUID(int=9006)),
+                },
+                execution_context_id=UUID(int=9006),
+            )
+
+        context_fields = set(self.execution_context.model_fields)
+        self.assertEqual(context_fields, {"user_id", "context_id"})
+        serialized = str(self._job().model_dump(mode="json"))
+        for secret in ("password", "token", "credential", "provider_secret"):
+            self.assertNotIn(secret, serialized.lower())
+
+    async def test_execution_context_does_not_leak_between_jobs(self):
+        first = self._job()
+        second = self._job(
+            meeting_id=UUID(int=91),
+            transcript_id=UUID(int=92),
+            execution_context=self._execution_context(UUID(int=9005)),
+        )
+        executor, processing_service, resolver = self._executor(result=self._result(first))
+        resolver.get_transcript.side_effect = [
+            self._transcript(),
+            self._transcript(meeting_id=UUID(int=91), transcript_id=UUID(int=92)),
+        ]
+        processing_service.process.side_effect = [self._result(first), self._result(second)]
+
+        first_result = await executor.execute(first)
+        second_result = await executor.execute(second)
+
+        self.assertEqual(first_result.status, self.jobs.AIProcessingJobStatus.COMPLETED)
+        self.assertEqual(second_result.status, self.jobs.AIProcessingJobStatus.COMPLETED)
+        self.assertNotEqual(
+            first.execution_context.context_id,
+            second.execution_context.context_id,
+        )
+        self.assertEqual(
+            [call.args[2].user_id for call in resolver.get_transcript.await_args_list],
+            [first.execution_context.user_id, second.execution_context.user_id],
+        )
 
     async def test_partial_processing_result_becomes_partially_failed_job(self):
         job = self._job(requested_operations=["summary", "tasks"])
@@ -433,6 +556,14 @@ class AIBackgroundProcessingTests(unittest.IsolatedAsyncioTestCase):
         job.context["project"] = "mutated-after-submit"
         result = await submission.run_next()
         self.assertEqual(executor.received.context["project"], "launch")
+        self.assertEqual(
+            executor.received.execution_context.context_id,
+            job.execution_context.context_id,
+        )
+        self.assertEqual(
+            executor.received.execution_principal_id,
+            job.execution_context.user_id,
+        )
         self.assertEqual(result.failure.code, self.jobs.JobFailureCode.EXECUTION_FAILED)
         with self.assertRaises(self.jobs.InvalidJobTransitionError):
             await submission.submit(result)
