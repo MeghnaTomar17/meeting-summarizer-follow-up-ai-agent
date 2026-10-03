@@ -4,7 +4,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 
 ## Status
 
-**Current checkpoint: Phase 9.3 — Live Redis/Celery execution integration.** Celery publishing, signed job authorization, worker runtime bootstrap, and an opt-in Redis-backed end-to-end integration test are implemented. The worker delegates to the existing Phase 8 executor, Meeting Service ownership check, and AI processing path. This machine has no Redis-compatible server available, so live broker execution has not been validated here; the Celery result backend remains disabled. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
+**Current status: Phase 9 — Redis, Celery, and durable job lifecycle COMPLETE.** PostgreSQL migration `0006_processing_jobs` is applied at Alembic head. The application job record owns lifecycle state, attempts, retry timing, sanitized failures, leases, and results; workers verify dedicated signed authorization before row-locked claims. PostgreSQL persistence, concurrent claims, expired-lease reclamation, stale-token fencing, and terminal-state persistence passed opt-in integration tests. Redis/Celery transport and worker integration are implemented, but live broker execution was not validated because Redis was unavailable in the development environment. No Celery result backend or exactly-once guarantee is provided. **Next: Phase 10 — Vector Search & RAG.** See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 

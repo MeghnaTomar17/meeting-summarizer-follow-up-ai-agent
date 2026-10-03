@@ -74,8 +74,8 @@ class Phase9_3BrokerConfigurationTests(unittest.TestCase):
         self.assertEqual(app.conf.accept_content, ["json"])
         self.assertEqual(app.conf.worker_concurrency, 1)
         self.assertEqual(app.conf.worker_prefetch_multiplier, 1)
-        self.assertFalse(app.conf.task_acks_late)
-        self.assertFalse(app.conf.task_reject_on_worker_lost)
+        self.assertTrue(app.conf.task_acks_late)
+        self.assertTrue(app.conf.task_reject_on_worker_lost)
 
     def test_importing_celery_app_does_not_open_redis_or_load_ai_or_database(self):
         self.assertFalse(any(name == "agents" or name.startswith("agents.") for name in sys.modules))

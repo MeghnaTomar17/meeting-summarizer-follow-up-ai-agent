@@ -23,12 +23,13 @@ class WorkerSettings(SharedSettings):
     celery_broker_connection_timeout: float = Field(default=5.0, gt=0, le=60)
     celery_broker_socket_connect_timeout: float = Field(default=5.0, gt=0, le=60)
     celery_broker_socket_timeout: float = Field(default=10.0, gt=0, le=120)
+    celery_task_time_limit_seconds: int = Field(default=900, ge=30, le=1800)
     celery_task_serializer: Literal["json"] = "json"
     celery_result_serializer: Literal["json"] = "json"
     celery_accept_content: tuple[Literal["json"], ...] = ("json",)
     celery_timezone: Literal["UTC"] = "UTC"
-    celery_task_acks_late: bool = False
-    celery_task_reject_on_worker_lost: bool = False
+    celery_task_acks_late: Literal[True] = True
+    celery_task_reject_on_worker_lost: Literal[True] = True
     celery_worker_prefetch_multiplier: int = Field(default=1, ge=1)
     celery_worker_concurrency: int = Field(default=1, ge=1)
 

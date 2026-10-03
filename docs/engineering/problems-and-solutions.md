@@ -1,12 +1,12 @@
 # Engineering Problems and Solutions
 
-This is a factual record of meaningful issues encountered through Phase 7.6.
+This is a factual record of meaningful issues encountered through Phase 9.
 It complements the current architecture documents; it does not turn deferred
 design choices into completed work.
 
-Phase 7.6 added deterministic integration coverage and exposed no production
-defect requiring a new problem entry. Earlier issues remain under their
-original checkpoint numbers.
+Earlier issues remain under their original checkpoint numbers. Phase 9 entries
+below record actual implementation and validation events, including the live
+Redis limitation and PostgreSQL lifecycle evidence.
 
 ## PS-001 — Test framework assumption
 
@@ -454,3 +454,123 @@ claim is made for this fix.
 “An aggregate contract should enforce its invariants itself, even if normal
 request construction already guarantees them. Validate uniqueness at both the
 request and result boundaries.”
+
+## PS-019 — Redis unavailable during live Celery validation
+
+### Context and observed limitation
+
+Phase 9 implemented a Redis-backed Celery broker boundary and a live worker
+integration test. Redis was not available in the local development
+environment, so the opt-in real-broker test could not be run. Configuration,
+message validation, mocked publisher behavior, and worker boundary tests do
+not prove live distributed execution.
+
+### Resolution and validation status
+
+The live integration test remains opt-in under
+`RUN_REDIS_CELERY_INTEGRATION=1` and requires an already reachable
+Redis-compatible broker. Phase 9 documentation records broker execution as
+implemented but not live-validated. Docker/Compose remains deferred and was
+not changed to supply Redis.
+
+### Engineering lesson / interview talking point
+
+“A configured broker and a passing mocked task test are not evidence that a
+real worker can exchange messages through Redis. Keep the real-broker test
+available and distinguish implementation from live validation.”
+
+## PS-020 — Queue envelope and trusted worker identity boundary
+
+### Context and decision
+
+Celery messages cross a broker boundary and must remain data-only. The worker
+needs an authenticated owner identity to reconstruct the existing Phase 8
+execution context, but a queue field such as `user_id` would be producer input
+and cannot be treated as authority.
+
+### Solution
+
+The queue accepts a strict primitive envelope containing only job, meeting,
+transcript, and operation identifiers. Trusted context, credentials, ORM
+state, and AI results are excluded. The producer places a separate signed
+authorization alongside that envelope; the worker verifies it and exact
+bindings before creating a trusted context. Unsupported free-form context is
+rejected rather than silently transported.
+
+### Engineering lesson / interview talking point
+
+“Queue serialization is a trust boundary. Transport the minimum explicit
+schema, then reconstruct authority only from a verified credential bound to
+that schema.”
+
+## PS-021 — Dedicated RS256 background-job authorization
+
+### Context and decision
+
+Neither the external access JWT nor the Gateway-to-Meeting internal principal
+has the intended purpose and binding for a distributed background job. The
+worker needs a short-lived assertion that binds the authenticated producer to
+one exact job envelope.
+
+### Solution and limitation
+
+Phase 9 uses a dedicated RS256 key pair and authorization purpose, issuer,
+audience, lifetime, subject, `jti`, and exact job/meeting/transcript/operation
+claims. The worker checks signature and claims before context creation. These
+keys are separate from external access-token and internal-principal keys.
+`jti` is metadata, not a durable one-time-consumption ledger; persistent job
+state limits duplicate execution, but no separate durable replay ledger or
+exactly-once guarantee is claimed.
+
+### Engineering lesson / interview talking point
+
+“Use credentials whose audience and purpose match the trust boundary. A
+valid user access token is not automatically a valid worker authorization.”
+
+## PS-022 — Durable job lifecycle and PostgreSQL lease fencing
+
+### Context and solution
+
+Celery delivery state alone cannot serve as durable application job state.
+Phase 9.4 added the `processing_jobs` PostgreSQL record and migration
+`0006_processing_jobs`. The producer registers before publishing; the worker
+uses row-locked claims, persisted attempts/retry timing, leases, sanitized
+failure state, and terminal results. Fresh lease tokens fence a worker whose
+lease expired and was reclaimed. This remains at-least-once execution, not
+exactly-once processing.
+
+### Validation
+
+Migration `0006_processing_jobs` is applied at Alembic head. The opt-in
+PostgreSQL integration passed **2/2 with no skips**, including concurrent
+claims, expired-lease reclamation, persisted attempts and lease replacement,
+stale completion/failure rejection, and final persisted state. The lifecycle
+suite passed **11/11**. Live Redis execution was not validated because Redis
+was unavailable.
+
+### Engineering lesson / interview talking point
+
+“Persist business lifecycle in the application database, use row locks and
+lease tokens to coordinate workers, and describe retry delivery as
+at-least-once unless every downstream effect is idempotent.”
+
+## PS-023 — PostgreSQL integration fixture omitted required echo setting
+
+### Symptom and root cause
+
+The Phase 9.4 PostgreSQL integration fixture called `init_database()` without
+its required keyword-only `echo` argument. The production API and its other
+callers already required this setting; the test setup was mismatched.
+
+### Solution and validation
+
+The fixture now passes `settings.database_echo`, consistent with shared
+settings and the lifecycle connection setup. No production database behavior
+changed. The PostgreSQL integration passed with `RUN_POSTGRES_INTEGRATION=1`
+and no skip, and its expanded lease-reclamation/fencing scenario also passed.
+
+### Engineering lesson / interview talking point
+
+“When a fixture violates an existing API contract, align the fixture with the
+project setting source instead of weakening production validation to satisfy
+the test.”

@@ -1,7 +1,8 @@
 # MannerAI Meetings Platform — Foundation and Current State
 
-> **Current scope:** Phase 0 through **Phase 9.3 live Redis/Celery execution integration**
-> **Current implementation:** Authentication and Meeting Service APIs/persistence, Phase 7 AI processing, Phase 8 job execution, and Phase 9.1–9.3 Celery transport, signed authorization, and worker runtime integration
+> **Current scope:** Phase 0 through **Phase 9 — Redis, Celery, and durable job lifecycle (complete)**
+> **Next phase:** Phase 10 — Vector Search & RAG
+> **Current implementation:** Authentication and Meeting Service APIs/persistence, Phase 7 AI processing, Phase 8 job execution, and complete Phase 9.1–9.4 Celery transport, signed authorization, worker integration, and durable job lifecycle
 > **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
 This is the current reference for implemented architecture. The later
@@ -17,12 +18,14 @@ provider adapter, transcript normalization, structured-output/domain mapping,
 MeetingInsight schema and repository boundary, `AIProcessingService`, and
 deterministic application-path integration tests. Phase 8 adds a process-local
 job submission/execution boundary that delegates to `AIProcessingService`.
-Phases 9.1–9.3 implement the Celery transport/task boundary, signed worker
-identity verification, and worker runtime composition. Live Redis operation
-depends on an available broker; durable job state remains deferred.
-Revision `0005_meeting_insights` is defined but unapplied. Public AI API
-exposure, automatic persistence, search, and frontend integration remain
-deferred.
+Phases 9.1–9.4 implement Celery transport, signed worker identity, worker
+runtime composition, and the PostgreSQL-backed application job lifecycle.
+Migration `0006_processing_jobs` is applied at Alembic head. PostgreSQL
+persistence, locking, lease reclamation/fencing, and terminal state have been
+validated against PostgreSQL. Live Redis broker execution remains unvalidated
+because Redis was unavailable in the development environment. Docker remains
+deferred. Public AI API exposure, automatic AI-result persistence, search, and
+frontend integration remain deferred.
 
 ---
 
@@ -44,9 +47,13 @@ deferred.
 | 6.1–6.5 | AI Service Foundation | Complete; provider-independent contracts, agents, orchestration, and hardening |
 | 7.1–7.6 | AI Meeting Intelligence Integration | Complete; provider adapter, transcript path, typed mapping, persistence design, application service, and deterministic integration tests |
 | 8 | Background Processing Application Boundary | Complete; framework-neutral job contract, executor/submission ports, and process-local FIFO adapter |
-| 9.1 | Redis/Celery Infrastructure Boundary | Implemented; JSON-only envelope, Celery app/configuration, submission and task adapters; trusted distributed identity and live Redis remain unavailable |
-| 9.2 | Trusted Distributed Job Identity | Implemented; purpose-specific RS256 authorization, exact envelope binding and worker verification; durable replay prevention and live Redis remain unavailable |
-| 9.3 | Live Redis/Celery Execution Integration | Implemented; startup runtime composition and opt-in real-broker test; live test not run because Redis is unavailable locally |
+| 9.1 | Redis/Celery Infrastructure Boundary | Complete; JSON-only envelope, Celery app/configuration, submission and task adapters; live Redis execution not validated locally |
+| 9.2 | Trusted Distributed Job Identity | Complete; purpose-specific RS256 authorization, exact envelope binding and worker verification; durable `jti` replay ledger intentionally deferred |
+| 9.3 | Redis/Celery Execution Integration | Complete; worker runtime composition and opt-in live-broker test implemented; live test not run because Redis was unavailable locally |
+| 9.4 | Job Reliability, Lifecycle & Failure Semantics | Complete; PostgreSQL lifecycle/migration and row-locked claims; opt-in PostgreSQL integration passed 2/2, lifecycle tests 11/11 |
+
+**Next phase:** Phase 10 — Vector Search & RAG. Docker/platform integration
+remains deferred to its later infrastructure phase.
 
 ---
 
@@ -63,9 +70,9 @@ flowchart TB
     Worker[worker-service :8004]
 
     PG[(PostgreSQL)]
-    Redis[(Redis — configured, not wired)]
+    Redis[(Redis broker — configured; live execution unvalidated)]
     Qdrant[(Qdrant — configured, not wired)]
-    Celery[Celery workers — configured, not wired]
+    Celery[Celery workers — runtime implemented; live broker execution unvalidated]
 
     Client --> Nginx
     Nginx -->|"/api/*"| Gateway
@@ -76,7 +83,7 @@ flowchart TB
     Gateway -.->|future proxy| Search
 
     Meeting -->|AsyncEngine / AsyncSession| PG
-    Worker -.->|future jobs| Celery
+    Worker -.->|implemented task boundary| Celery
     Celery -.-> Redis
     Search -.-> Qdrant
     Gateway -.-> Redis
@@ -105,18 +112,19 @@ flowchart TB
 ### Planned / deferred integrations
 
 - Organization membership and authorization for organization-wide meeting listing
-- Redis client wiring
+- Redis client wiring for caching/sessions (Celery broker transport is implemented)
+- Live Redis/Celery worker execution validation (Redis was unavailable locally)
 - Qdrant vector operations
-- Celery worker execution
-- Distributed worker execution and production pipeline/Gateway integration
+- Production pipeline/Gateway integration
 - Automatic AI-output persistence after mapping
-- Applying and PostgreSQL-validating `0005_meeting_insights`
 - Public AI processing/job APIs
 - Semantic search and vector retrieval
 - Docker/deployment hardening (intentionally deferred)
 - Frontend integration
 
-Configuration fields and stub modules exist for Redis, Qdrant, and Celery, but they are **not** active application integrations.
+Celery task submission and worker integration are implemented. Live Redis
+execution has not been validated. Qdrant operations and Redis cache/session
+integration remain deferred.
 
 ---
 
@@ -126,11 +134,11 @@ Configuration fields and stub modules exist for Redis, Qdrant, and Celery, but t
 |---------|---------------------|-----------|--------|
 | **gateway-service** | Public API, auth/user routes, meeting/result facade, OpenAPI, health probes | **PostgreSQL (users/sessions)** | Phase 4 authentication; Phase 5 public v1 proxies |
 | **meeting-service** | Health probes, PostgreSQL lifecycle/readiness, meeting-domain APIs | **PostgreSQL (meetings/transcripts/results)** | Ownership-enforced service and domain persistence |
-| **ai-service** | Health probes plus job contracts/executor, `AIProcessingService`, transcript normalization, five agents, provider adapter, typed orchestration and domain mapping | None | Phase 7 path plus Phase 8 process-local job boundary; no persistence or durable queue |
+| **ai-service** | Job contracts/submission coordinator, `AIProcessingService`, transcript normalization, five agents, provider adapter, typed orchestration and domain mapping | PostgreSQL (`processing_jobs` through shared lifecycle) | Phase 7 AI path plus Phase 8 executor and Phase 9 submission boundary |
 | **search-service** | Health probes | None | Foundation only |
-| **worker-service** | Health probes | None | Foundation only |
+| **worker-service** | Celery execution, trusted identity verification, persistent job lifecycle and retry scheduling | PostgreSQL (`processing_jobs`, meetings/transcripts via MeetingService) | Phase 9 worker runtime; broker execution requires Redis |
 
-**Database ownership principle:** A service gets database access when it owns a persistence responsibility. Gateway owns user and refresh-session persistence; Meeting Service owns meetings, transcripts, and persisted domain results, with the MeetingInsight repository boundary defined pending migration 0005. The AI Service returns mapped domain inputs and remains persistence-independent; applying migration 0005 and invoking persistence after AI processing are separate responsibilities. Search and worker PostgreSQL access remain deferred.
+**Database ownership principle:** Gateway owns user and refresh-session persistence; Meeting Service owns meetings, transcripts, and persisted domain results, with MeetingInsight still pending migration 0005. The shared application job lifecycle owns `processing_jobs`; AI submission registers the authenticated job and the worker owns lifecycle transitions. The AI processing service itself continues to return mapped domain inputs without persisting meeting results. Search PostgreSQL access remains deferred.
 
 ---
 
@@ -692,7 +700,7 @@ successful mapped values are automatically persisted.
 | 7.1 Real Model Provider | Provider-neutral `ModelProvider` protocol plus an injected OpenAI adapter. Deterministic tests do not use OpenAI or make network calls. |
 | 7.2 Transcript Processing Integration | `TranscriptInDB` is normalized into provider-neutral `AgentInput`; segment ordering, speaker, text, timestamps, language, and trusted IDs are preserved/validated. Agents do not retrieve transcripts from a database. |
 | 7.3 AI Output Validation & Domain Mapping | Shared structured JSON/Pydantic validation and explicit mappings from all five typed agent outputs to existing domain input schemas. Mapping errors are isolated per operation. |
-| 7.4 MeetingInsight Persistence | Shared `InsightCategory`, `MeetingInsight` ORM/schema, Meeting relationship, meeting-scoped repository, and reversible Alembic revision `0005_meeting_insights`. Migration is defined but unapplied and not PostgreSQL-validated. |
+| 7.4 MeetingInsight Persistence | Shared `InsightCategory`, `MeetingInsight` ORM/schema, Meeting relationship, meeting-scoped repository, and reversible Alembic revision `0005_meeting_insights`. At the Phase 7 checkpoint migration was defined but unapplied; it is included in the current PostgreSQL schema at head `0006_processing_jobs`. |
 | 7.5 AI Processing Service Contract | `AIProcessingService` coordinates transcript normalization, one orchestrator call, identity checks, output mapping, ordered typed results, and safe operation-level failure aggregation. It has no persistence/session/repository dependency. |
 | 7.6 AI Integration Testing | Test-only deterministic `ModelProvider` exercises the real service → orchestrator → agents → structured validation → domain mapping path with success, empty, malformed, partial-failure, identity, transcript-preservation, and no-persistence scenarios. |
 
@@ -737,9 +745,10 @@ service boundary.
   cascades through the FK and ORM `delete-orphan` relationship. There is no
   `updated_at`, status, version, processing run ID, provider metadata, or
   semantic deduplication/replacement policy; similar results may coexist.
-- The migration and repository are defined, but revision `0005_meeting_insights`
-  is not applied or validated against PostgreSQL. AIProcessingService does not
-  call the repository or commit results.
+- At the Phase 7 checkpoint, revision `0005_meeting_insights` was not yet
+  applied or validated against PostgreSQL. It is included in the current
+  PostgreSQL schema at head `0006_processing_jobs`. AIProcessingService still
+  does not call the repository or commit results.
 
 ### Phase 7 validation evidence
 
@@ -754,7 +763,8 @@ test-only deterministic provider:
 - `pip check`: **No broken requirements found**.
 - `git diff --check`: **passed**.
 - The 8 skips are opt-in tests; these results do not represent PostgreSQL
-  validation of MeetingInsight or application of migration 0005.
+  validation of MeetingInsight or application of migration 0005 at that Phase 7
+  checkpoint; the later Phase 9 database is at head `0006_processing_jobs`.
 
 ### Deferred at the end of Phase 7 (historical checkpoint)
 
@@ -882,14 +892,14 @@ CeleryJobSubmissionPort
 defaults to `redis://localhost:6379/1`. The broker URL is validated as Redis or
 TLS Redis. Task and result serialization are JSON-only, accepted content is
 JSON-only, and timezone is UTC. Worker concurrency and prefetch default to one.
-Tasks acknowledge before execution (`task_acks_late=false`) and do not enable
-worker-loss redelivery. These conservative settings do not provide durable or
-exactly-once semantics.
+Tasks use late acknowledgement and worker-loss redelivery. PostgreSQL
+application lifecycle and lease claims bound the redelivery/attempt behavior;
+they do not provide exactly-once semantics.
 
 No Celery result backend is configured. Celery is the delivery/orchestration
-mechanism; the executor's `AIProcessingJob` lifecycle and `AIProcessingResult`
-remain the application semantics. Task state is not substituted for business
-status, and no result persistence/status API is added.
+mechanism; the `processing_jobs` record is the authoritative persisted
+application lifecycle and stores the typed mapped result. Task state is not
+substituted for business status. No public job status API is added.
 
 `AIProcessingJobEnvelope` has exactly four fields: job ID, meeting ID,
 transcript ID, and requested operation names. Pydantic strict validation
@@ -923,8 +933,9 @@ The default authorization lifetime is 120 seconds (maximum 300 seconds), with
 five seconds of worker clock-skew allowance. `jti` is unique metadata, not a
 replay ledger: an intact message can be reused for that same job until expiry
 (including the skew allowance). Durable one-time consumption/idempotency is
-deferred until a persistent job store exists; no in-memory cache is claimed as
-distributed replay protection.
+deferred. The persistent lifecycle makes repeated deliveries of the same
+application job ID a terminal/running no-op or locked claim, but it does not
+consume `jti` values as a separate replay ledger.
 
 Celery 5.4 and Redis client 5.2.1 are already pinned in root
 `requirements.txt`; there are no dependency changes. Redis is not installed or
@@ -944,9 +955,9 @@ session, and provider resources are scoped to an executed job.
 
 `CELERY_BROKER_URL` defaults to `redis://localhost:6379/1`. Broker connection,
 socket-connect, and socket-operation timeouts default to 5, 5, and 10 seconds.
-No result backend is configured. Tasks acknowledge before execution and do
-not request redelivery when a worker is lost; there is no durable job status,
-replay prevention, automatic retry, or idempotency guarantee.
+No result backend is configured. Phase 9.4 adds durable job status and
+application-level retry/duplicate protection, with the limits documented
+below.
 
 From the repository root in PowerShell, run a worker with:
 
@@ -972,6 +983,76 @@ through the real Phase 8 executor and Meeting Service ownership path. A
 Redis-compatible service must already be available. Redis was unavailable in
 the development environment used for this checkpoint, so the live test was
 not run; offline tests validate the boundary and test harness imports.
+
+### Phase 9.4 job reliability, lifecycle, and failure semantics
+
+The `processing_jobs` table is the application source of truth; Celery result
+state remains disabled. The job row is keyed by the application UUID and
+stores meeting/transcript/owner IDs, requested operation names, state, maximum
+attempts, attempt count, lifecycle timestamps, next-attempt/lease metadata,
+sanitized failure data, and JSON-safe mapped AI results. It stores no
+authorization or external credential. `ApplicationJobSubmissionService`
+registers the same logical job before calling the Celery publisher. A same-ID
+duplicate with identical bindings is idempotent; a same-ID different owner or
+input is rejected. No public job-status API is exposed.
+
+Allowed transitions are `queued → running`, `queued → failed`,
+`running → completed`, `running → partial`, `running → failed`, and
+`running → queued` for a retry. An expired running lease can be reclaimed as a
+new running attempt under a fresh lease token. Completed, partial, and failed
+are terminal. PostgreSQL row locks serialize claims and completions; the lease
+token prevents an expired worker from committing over the newer claim.
+
+The worker verifies message structure and Phase 9.2 authorization before
+loading the matching row. The signed subject must match the stored owner. It
+then performs MeetingService ownership/transcript validation before claiming
+an attempt; a rejected target transitions to failed without incrementing
+attempts or invoking AI. Invalid authorization does not change lifecycle
+state. Ownership/security, validation, malformed-message, and
+application-processing failures are not automatically retried.
+
+The attempt counter increments only when a PostgreSQL-locked claim succeeds.
+Duplicate delivery while a lease is current is deferred without incrementing;
+expired-lease recovery increments a new attempt. Defaults permit three
+attempts, with exponential backoff beginning at two seconds and capped at 60
+seconds. Provider unavailable/timeout and unexpected worker execution failures
+are transient; only those are rescheduled. A final transient failure is stored
+as `attempts_exhausted`. Celery's retry counter is only a scheduling mechanism
+and does not decide application attempts.
+
+Partial AI results become `partial`, preserving successful mapped operation
+outputs and sanitized failed-operation information in the JSON result. They
+are not retried as a whole, avoiding duplicate successful work. Full results
+are retained on completed jobs; failed jobs retain sanitized failure category
+and message.
+
+Celery uses late acknowledgement and worker-loss redelivery. A 16-minute DB
+lease exceeds the configured 15-minute Celery hard task limit. The application
+row lock and lease make duplicate delivery safe against concurrent claims, but
+do not guarantee exactly-once execution, prevent every possible replay, or
+make arbitrary downstream side effects idempotent. PostgreSQL is required for
+durable lifecycle and concurrency protection; Redis is required only for
+distributed queue delivery. If the database is unavailable before claim or a
+broker cannot schedule a persisted retry, queued work may need operational
+redrive. The opt-in PostgreSQL test requires migrations through head, including
+`0006_processing_jobs`; this PostgreSQL database is at Alembic head. The live
+Redis test remains separately opt-in and was not run because Redis was
+unavailable.
+
+#### Phase 9.4 validation evidence
+
+The opt-in PostgreSQL integration suite passed **2/2 with no skips**. It
+verified migrated-schema persistence, row-locked concurrent claim behavior,
+attempt counts, expired-lease reclamation, fresh lease-token persistence,
+stale completion/failure rejection, and terminal-state persistence. The
+Phase 9.4 lifecycle suite passed **11/11**. Database regressions passed **19
+tests (1 skipped)**, and the Phase 5 PostgreSQL regression passed **1/1**.
+The full backend discovery suite passed **483 tests with 11 skipped**; the
+opt-in Phase 9 PostgreSQL suite was run separately and passed as described
+above. The missing `echo` keyword in the Phase 9.4 fixture was corrected to pass
+`settings.database_echo`; production database behavior was unchanged.
+`git diff --check` passed. Live Redis/Celery execution remains unvalidated.
+Docker is intentionally deferred.
 
 ## Phase 3 persistence architecture (historical baseline)
 
@@ -1205,6 +1286,10 @@ alembic -c alembic.ini upgrade head
 | `test_meeting_domain_services.py` | 5 | Domain operations, commits, conflicts, and ownership |
 | `test_meeting_domain_routes.py`, `test_gateway_meeting_results.py` | 5 | Result APIs, authorization, and Gateway proxies |
 | `test_phase5_postgres_integration.py` | 5 | Opt-in PostgreSQL result persistence and constraints |
+| `test_phase9_celery_boundary.py`, `test_phase9_2_job_authorization.py` | 9.1–9.2 | Strict JSON envelope, signed background-job authorization, and fail-closed worker boundary |
+| `test_phase9_3_redis_celery.py` | 9.3 | Celery runtime boundary and opt-in live Redis/Celery worker integration |
+| `test_phase9_4_job_lifecycle.py` | 9.4 | Durable lifecycle transitions, attempts, retry policy, and lease fencing |
+| `test_phase9_4_postgres_integration.py` | 9.4 | Opt-in PostgreSQL persistence, concurrent claim, lease reclamation/fencing, and terminal state |
 
 ### Phase 4 checkpoint count
 
@@ -1342,9 +1427,8 @@ meeting-summarizer-follow-up-ai-agent/
 - Public Gateway listing of meetings by organization
 - Public AI processing API, Gateway pipeline integration, and meeting upload processing
 - Automatic persistence invocation after AI processing; the processing service returns domain-ready inputs only
-- Applying and PostgreSQL-validating `0005_meeting_insights`
 - Semantic search and vector indexing
-- Durable Redis/Celery job state, retries, and delivery/idempotency policy; the broker and worker execution path are implemented, while Phase 8 process-local execution remains available
+- Public job status/submission APIs, operational redispatch/outbox, and exactly-once/downstream idempotency guarantees; internal PostgreSQL job lifecycle and Redis/Celery execution are implemented, while Phase 8 process-local execution remains available
 - Redis client wiring for cache and sessions (Celery broker transport is implemented)
 - Qdrant vector store operations
 - Production AI pipeline/Gateway integration

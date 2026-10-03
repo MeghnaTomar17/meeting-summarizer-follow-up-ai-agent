@@ -110,7 +110,7 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(defaults.celery_broker_url), "redis://localhost:6379/1")
         self.assertEqual(defaults.celery_timezone, "UTC")
         self.assertEqual(defaults.celery_accept_content, ("json",))
-        self.assertFalse(defaults.celery_task_acks_late)
+        self.assertTrue(defaults.celery_task_acks_late)
         self.assertEqual(defaults.celery_worker_prefetch_multiplier, 1)
         self.assertEqual(defaults.celery_worker_concurrency, 1)
 
@@ -152,7 +152,8 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app.conf.enable_utc)
         self.assertEqual(app.conf.worker_concurrency, 1)
         self.assertEqual(app.conf.worker_prefetch_multiplier, 1)
-        self.assertFalse(app.conf.task_acks_late)
+        self.assertTrue(app.conf.task_acks_late)
+        self.assertTrue(app.conf.task_reject_on_worker_lost)
         self.assertTrue(app.conf.task_ignore_result)
         self.assertIsNone(app.conf.result_backend)
         self.assertIn("jobs.ai_processing_task", app.conf.include)

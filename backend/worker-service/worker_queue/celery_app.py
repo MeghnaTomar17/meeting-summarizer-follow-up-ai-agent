@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from celery import Celery
-from celery.signals import worker_init
+from celery.signals import worker_init, worker_shutdown
 
 from app.config.settings import WorkerSettings, get_settings
 
@@ -34,6 +34,7 @@ def create_celery_app(settings: WorkerSettings | None = None) -> Celery:
             "socket_timeout": settings.celery_broker_socket_timeout,
             "retry_on_timeout": True,
         },
+        task_time_limit=settings.celery_task_time_limit_seconds,
         task_ignore_result=True,
     )
     return app
@@ -59,3 +60,15 @@ def configure_ai_job_runtime_on_worker_start(**_: object) -> None:
     configure_job_execution(create_worker_job_runtime(get_settings()))
 
 __all__ = ["create_celery_app", "celery_app"]
+
+
+@worker_shutdown.connect(weak=False)
+def close_ai_job_runtime_on_worker_shutdown(**_: object) -> None:
+    import asyncio
+
+    from jobs.ai_processing_task import get_job_execution_runtime
+
+    runtime = get_job_execution_runtime()
+    lifecycle = getattr(runtime, "lifecycle", None)
+    if lifecycle is not None:
+        asyncio.run(lifecycle.aclose())

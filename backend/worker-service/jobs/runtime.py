@@ -14,6 +14,9 @@ from sqlalchemy.pool import NullPool
 from app.config.settings import WorkerSettings
 from shared.schemas.ai_job_envelope import AIProcessingJobEnvelope
 from shared.security.execution_context import TrustedExecutionContext
+from shared.jobs.lifecycle import PostgresJobLifecycle
+from shared.jobs.lifecycle import JobTargetRejectedError
+from shared.exceptions.common import ForbiddenError, NotFoundError
 
 
 def _backend_root() -> Path:
@@ -88,6 +91,38 @@ class _Phase8ExecutorAdapter:
         self._types = service_types
         self._ai_settings = service_types["get_settings"]()
 
+    async def authorize_target(self, job: Any) -> None:
+        """Run MeetingService ownership/transcript checks before lifecycle claim."""
+        engine = create_async_engine(
+            self._settings.database_url,
+            pool_pre_ping=True,
+            echo=self._settings.database_echo,
+            poolclass=NullPool,
+        )
+        try:
+            session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+            async with session_factory() as session:
+                meeting_service = self._types["MeetingService"](
+                    session,
+                    self._types["MeetingRepository"](session),
+                    self._types["TranscriptRepository"](session),
+                )
+                transcript_provider = self._types["MeetingServiceTranscriptInputProvider"](meeting_service)
+                try:
+                    await transcript_provider.get_transcript(
+                        job.meeting_id,
+                        job.transcript_id,
+                        job.execution_context,
+                    )
+                except ForbiddenError:
+                    raise JobTargetRejectedError() from None
+                except NotFoundError:
+                    from shared.jobs.lifecycle import FailureCategory
+
+                    raise JobTargetRejectedError(FailureCategory.PERMANENT_VALIDATION) from None
+        finally:
+            await engine.dispose()
+
     async def execute(self, job: Any) -> Any:
         engine = create_async_engine(
             self._settings.database_url,
@@ -146,11 +181,14 @@ def create_worker_job_runtime(settings: WorkerSettings) -> object:
             execution_context=execution_context,
         )
 
+    executor = _Phase8ExecutorAdapter(settings, service_types)
     return type(
         "WorkerJobExecutionRuntime",
         (),
         {
-            "executor": _Phase8ExecutorAdapter(settings, service_types),
+            "executor": executor,
+            "authorize_target": executor.authorize_target,
+            "lifecycle": PostgresJobLifecycle(settings),
             "verification_key": public_key or "",
             "authorization_issuer": settings.background_job_issuer,
             "authorization_audience": settings.background_job_audience,

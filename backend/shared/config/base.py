@@ -77,6 +77,11 @@ class SharedSettings(BaseSettings):
     database_pool_recycle: int = Field(default=1800, ge=0)
     database_echo: bool = False
 
+    processing_job_max_attempts: int = Field(default=3, ge=1, le=10)
+    processing_job_retry_base_seconds: float = Field(default=2.0, gt=0, le=30)
+    processing_job_retry_max_seconds: float = Field(default=60.0, gt=0, le=300)
+    processing_job_lease_seconds: int = Field(default=960, ge=60, le=3600)
+
     redis_url: str = "redis://localhost:6379/0"
 
     # Non-secret conventions for Gateway-issued service-to-service assertions.

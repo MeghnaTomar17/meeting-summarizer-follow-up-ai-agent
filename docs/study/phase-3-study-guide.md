@@ -3,14 +3,14 @@
 ## Current elevator pitch
 
 MannerAI is a microservice-oriented meeting-intelligence platform. Through
-Phase 7, the implemented platform includes authenticated Gateway and Meeting
-Service persistence flows plus an AI application path that normalizes a supplied
-transcript, runs five typed agents through an injected provider, validates
-structured outputs, and maps successes into domain-ready inputs. The OpenAI
-adapter exists, but AIProcessingService does not retrieve or persist records.
-Public AI APIs, background execution, and production pipeline integration
-remain deferred. Earlier sections below remain study notes for their named
-phase/checkpoint.
+Phase 9, it includes authenticated Gateway and Meeting Service persistence,
+the typed AI processing path, a Phase 8 executor, and Phase 9 Redis/Celery
+transport with dedicated signed worker authorization and a PostgreSQL-backed
+job lifecycle. PostgreSQL persistence, concurrent claims, lease reclamation,
+stale-token fencing, and terminal results were validated against PostgreSQL.
+Live Redis/Celery execution was not validated because Redis was unavailable.
+Phase 10 — Vector Search & RAG is next; Docker remains deferred. Earlier
+sections below remain study notes for their named phase/checkpoint.
 
 ## Architecture to explain
 
@@ -621,9 +621,9 @@ Mapping failures affect only their operation, preserving other successes.
   `title`, `description`, `created_at`) with no update/status/version/run ID or
   provider metadata. Similar insights may coexist; no semantic deduplication
   or replacement exists.
-- Migration `0005_meeting_insights` is defined and reversible but unapplied and
-  not PostgreSQL-validated. Repository/schema existence does not mean the
-  table is present in the current database.
+- At the Phase 7 checkpoint, migration `0005_meeting_insights` was defined but
+  unapplied and not PostgreSQL-validated. It is now included in the current
+  database schema at Alembic head `0006_processing_jobs`.
 
 ### What Phase 7.6 integration tests prove
 
@@ -634,8 +634,9 @@ validation → domain mapping` path. They cover all five operations, empty
 collections, partial failures, malformed output, ordering/deduplication,
 transcript ordering/speakers/timestamps/language, trusted identity, unsafe
 mapping, and absence of persistence imports/side effects. They do not validate
-live OpenAI behavior, PostgreSQL migration 0005, semantic accuracy, retries,
-or background execution.
+live OpenAI behavior, semantic accuracy, retries, or background execution.
+Migration 0005 was not validated during the Phase 7 checkpoint; the later
+Phase 9 PostgreSQL database is now at head 0006.
 
 Phase 7 checkpoint verification: **422 backend tests run, 8 skipped; all
 non-skipped tests passed**;
@@ -650,3 +651,87 @@ automatic persistence invocation, background workers/retries/idempotency,
 applying and PostgreSQL-validating migration 0005, insight deduplication,
 Qdrant/RAG/search, frontend AI workflow, Gmail, and deployment remain future
 work.
+
+## Phase 9 — Redis, Celery, and durable job lifecycle
+
+### Why Redis and Celery
+
+AI work should not hold an HTTP request open while providers and multiple
+agents run. Celery provides task delivery and worker orchestration; Redis is
+the configured broker. The queue boundary is implemented, while live
+Redis/Celery worker execution was not validated because Redis was unavailable
+in the development environment. Do not describe broker integration as live
+tested based on unit or mocked-publisher tests.
+
+### Queue data is not trusted identity
+
+The task message uses a strict primitive envelope containing the job,
+meeting, transcript, and requested operation identifiers. It excludes
+`TrustedExecutionContext`, a freely supplied `user_id`, access/refresh tokens,
+ORM/session objects, credentials, and AI results. The worker must not turn an
+arbitrary queue field into authority. It verifies the producer authorization
+and exact envelope bindings, then reconstructs trusted context from the
+verified subject.
+
+### Producer-signed background authorization
+
+The producer signs a short-lived, purpose-specific RS256 authorization with a
+dedicated private key. It binds issuer, audience, purpose, subject, time
+window, `jti`, and the exact job/meeting/transcript/operation values. The
+worker verifies signature, issuer, audience, lifetime, purpose, and all
+bindings before it creates a trusted execution context or proceeds to the
+existing executor/Meeting Service ownership checks.
+
+This credential is not an external user access JWT and is not the
+Gateway-to-Meeting internal principal. Those tokens have different audiences,
+purposes, and trust flows. Dedicated background signing and verification
+keys keep those boundaries separate. A `jti` is unique metadata here; without
+a durable JTI ledger, it does not provide one-time replay prevention.
+
+### PostgreSQL claims, leases, and fencing
+
+The `processing_jobs` row is the durable application record; PostgreSQL is
+not interchangeable with Celery task state. `SELECT FOR UPDATE` serializes
+claims against the same row. A successful claim increments the persisted
+attempt count and installs a random lease token and expiry. If a running
+lease expires, another claim can reclaim the row as a new attempt with a new
+token. Completion/failure methods check that token, so a stale worker cannot
+overwrite the new attempt.
+
+Phase 9.4's opt-in PostgreSQL integration passed **2/2 with no skips**. It
+exercised persisted queue/claim state, concurrent claims, expired-lease
+reclamation, attempt and lease replacement, stale completion/failure
+rejection, and final terminal-state persistence. The lifecycle suite passed
+**11/11**. These checks validate PostgreSQL behavior; they do not validate
+live Redis delivery.
+
+### Retry, delivery, and recovery limits
+
+Celery retry scheduling and the application's persisted attempt count serve
+different roles. PostgreSQL owns the allowed attempt count, due time, lease,
+and terminal outcome. Transient infrastructure failures may be retried with
+bounded backoff; validation, security, and application processing failures
+are terminal under the current policy. Partial operation results are
+persisted rather than retrying all successful operations.
+
+Late acknowledgements and worker-loss redelivery improve recovery, and
+PostgreSQL row locks/lease tokens protect state transitions. The system is
+still at-least-once: it does not promise exactly-once execution or make
+arbitrary provider/downstream side effects idempotent. If PostgreSQL is
+unavailable before a claim or Celery cannot schedule a persisted retry,
+operational redrive may be needed. There is no separate durable JTI replay
+ledger or public job-status API.
+
+Celery has no result backend configured. That is deliberate: task delivery
+state is not the application's business lifecycle, which is persisted in
+PostgreSQL. The AI executor continues to return typed results, and the job
+row stores mapped results and sanitized failure details.
+
+### Current Phase 9 checkpoint and next work
+
+Migration `0006_processing_jobs` is applied at Alembic head. PostgreSQL
+persistence, row locking, lease reclamation, stale-token fencing, and
+terminal persistence are validated against PostgreSQL. Live Redis/Celery
+execution remains unvalidated until a Redis-compatible broker is available.
+Docker and Compose changes remain deferred. Phase 9 is complete; Phase 10 —
+Vector Search & RAG is next.
