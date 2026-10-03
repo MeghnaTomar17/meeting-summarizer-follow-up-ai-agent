@@ -1,24 +1,29 @@
-"""Celery task entrypoint; delegates validated work to the Phase 8 executor."""
+"""Celery task entrypoint; verifies identity then delegates to Phase 8 executor."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from typing import Any, Protocol
+from uuid import UUID
 
 from pydantic import ValidationError
 
-from shared.schemas.ai_job_envelope import AIProcessingJobEnvelope
+from shared.schemas.ai_job_envelope import (
+    AIProcessingJobEnvelope,
+    AuthorizedAIProcessingJobMessage,
+)
+from shared.security.background_job_authorization import verify_job_authorization
 from shared.security.execution_context import TrustedExecutionContext
 from worker_queue.celery_app import celery_app
 
 
 class TrustedExecutionContextUnavailable(RuntimeError):
-    """No authenticated producer/worker identity resolver is configured."""
+    """No valid signed producer authorization is configured or supplied."""
 
 
 class InvalidQueueEnvelopeError(ValueError):
-    """Queue payload is not a valid primitive job envelope."""
+    """Queue payload is not a valid primitive job message."""
 
 
 class JobExecutor(Protocol):
@@ -27,10 +32,10 @@ class JobExecutor(Protocol):
 
 class JobExecutionRuntime(Protocol):
     executor: JobExecutor
-
-    def resolve_execution_context(
-        self, envelope: AIProcessingJobEnvelope
-    ) -> TrustedExecutionContext: ...
+    verification_key: str
+    authorization_issuer: str
+    authorization_audience: str
+    authorization_max_age_seconds: int
 
     def create_job(
         self,
@@ -43,49 +48,57 @@ _execution_runtime: JobExecutionRuntime | None = None
 
 
 def configure_job_execution(runtime: JobExecutionRuntime | None) -> None:
-    """Install worker-local dependencies after trusted identity wiring exists."""
+    """Install worker-local verification and Phase 8 execution dependencies."""
     global _execution_runtime
     _execution_runtime = runtime
 
 
-def _validate_envelope(payload: object) -> AIProcessingJobEnvelope:
+def _validate_message(payload: object) -> tuple[AIProcessingJobEnvelope, str]:
     try:
         wire_json = json.dumps(payload, allow_nan=False, separators=(",", ":"))
-        return AIProcessingJobEnvelope.model_validate_json(wire_json)
+        message = AuthorizedAIProcessingJobMessage.model_validate_json(wire_json)
+        return message.envelope, message.authorization
     except (TypeError, ValueError, ValidationError):
-        # Do not echo an untrusted payload (which may contain credential fields)
-        # in task errors or Celery logs.
-        raise InvalidQueueEnvelopeError("The queue job envelope is invalid.") from None
+        # Never echo an untrusted message, which may carry credential-like data.
+        raise InvalidQueueEnvelopeError("The queue job message is invalid.") from None
 
 
 def execute_job_envelope(payload: object) -> dict[str, str]:
-    """Validate the wire message, establish trusted context, and call executor."""
-    envelope = _validate_envelope(payload)
+    """Validate, verify, establish context, then call the existing executor."""
+    envelope, authorization = _validate_message(payload)
     runtime = _execution_runtime
     if runtime is None:
         raise TrustedExecutionContextUnavailable(
-            "Trusted queue identity resolution is not configured."
+            "Trusted queue authorization is not configured."
         )
 
-    execution_context = runtime.resolve_execution_context(envelope)
-    if (
-        not isinstance(execution_context, TrustedExecutionContext)
-        or not execution_context.was_issued_by_authenticated_boundary
-    ):
+    try:
+        user_id = verify_job_authorization(
+            authorization,
+            envelope,
+            public_key=runtime.verification_key,
+            issuer=runtime.authorization_issuer,
+            audience=runtime.authorization_audience,
+            max_age_seconds=runtime.authorization_max_age_seconds,
+        )
+    except Exception:
         raise TrustedExecutionContextUnavailable(
-            "The queue message has no trusted execution context."
-        )
+            "The queue job authorization is invalid."
+        ) from None
+    if not isinstance(user_id, UUID):
+        raise TrustedExecutionContextUnavailable("The queue job authorization is invalid.")
 
+    # Identity is issued only from the verified signed subject; no queue field
+    # can be used to construct this context.
+    execution_context = TrustedExecutionContext._issue_from_authenticated_user_id(user_id)
     job = runtime.create_job(envelope, execution_context)
     job_context = getattr(job, "execution_context", None)
     if (
         getattr(job, "job_id", None) != envelope.job_id
         or getattr(job, "meeting_id", None) != envelope.meeting_id
         or getattr(job, "transcript_id", None) != envelope.transcript_id
-        or getattr(job, "requested_operations", None)
-        != envelope.requested_operations
-        or getattr(job, "execution_context_id", None)
-        != execution_context.context_id
+        or getattr(job, "requested_operations", None) != envelope.requested_operations
+        or getattr(job, "execution_context_id", None) != execution_context.context_id
         or getattr(job, "execution_principal_id", None) != execution_context.user_id
         or not isinstance(job_context, TrustedExecutionContext)
         or not job_context.was_issued_by_authenticated_boundary

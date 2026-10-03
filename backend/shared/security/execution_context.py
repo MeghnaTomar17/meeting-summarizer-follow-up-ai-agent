@@ -10,9 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 class TrustedExecutionContext(BaseModel):
     """Authenticated Gateway principal carried across an internal job boundary.
 
-    Gateway auth issues contexts after ``get_current_user`` validates
-    credentials and loads the persisted row. This value contains no credentials
-    and is not a public request schema.
+    Gateway auth issues request contexts after ``get_current_user`` validates
+    credentials and loads the persisted row. The worker may issue one only
+    after verifying a purpose-specific signed job authorization. This value
+    contains no credentials and is not a public request schema.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

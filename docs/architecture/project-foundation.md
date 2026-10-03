@@ -1,7 +1,7 @@
 # MannerAI Meetings Platform — Foundation and Current State
 
-> **Current scope:** Phase 0 through **Phase 9.1 Redis/Celery boundary**
-> **Current implementation:** Authentication and Meeting Service APIs/persistence, Phase 7 AI processing, Phase 8 process-local job execution, and Phase 9.1 Celery configuration/envelope/task adapters
+> **Current scope:** Phase 0 through **Phase 9.2 trusted distributed job identity**
+> **Current implementation:** Authentication and Meeting Service APIs/persistence, Phase 7 AI processing, Phase 8 process-local job execution, and Phase 9.1–9.2 Celery transport plus signed job authorization
 > **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
 This is the current reference for implemented architecture. The later
@@ -17,8 +17,8 @@ provider adapter, transcript normalization, structured-output/domain mapping,
 MeetingInsight schema and repository boundary, `AIProcessingService`, and
 deterministic application-path integration tests. Phase 8 adds a process-local
 job submission/execution boundary that delegates to `AIProcessingService`.
-Phase 9.1 defines the Celery transport/task boundary; live Redis operation,
-trusted worker identity wiring, and durable job state remain deferred.
+Phases 9.1–9.2 define the Celery transport/task boundary and signed worker
+identity verification; live Redis operation and durable job state remain deferred.
 Revision `0005_meeting_insights` is defined but unapplied. Public AI API
 exposure, automatic persistence, search, and frontend integration remain
 deferred.
@@ -44,6 +44,7 @@ deferred.
 | 7.1–7.6 | AI Meeting Intelligence Integration | Complete; provider adapter, transcript path, typed mapping, persistence design, application service, and deterministic integration tests |
 | 8 | Background Processing Application Boundary | Complete; framework-neutral job contract, executor/submission ports, and process-local FIFO adapter |
 | 9.1 | Redis/Celery Infrastructure Boundary | Implemented; JSON-only envelope, Celery app/configuration, submission and task adapters; trusted distributed identity and live Redis remain unavailable |
+| 9.2 | Trusted Distributed Job Identity | Implemented; purpose-specific RS256 authorization, exact envelope binding and worker verification; durable replay prevention and live Redis remain unavailable |
 
 ---
 
@@ -836,8 +837,8 @@ This process-local adapter does not guarantee durable jobs, retries,
 at-least-once or exactly-once delivery, crash recovery, distributed locking,
 queue persistence, worker concurrency, or dead-letter handling. Pending jobs
 disappear on process exit. AI results remain return values and are not
-automatically persisted. Phase 9.1 defines the Celery transport/task boundary
-below; live broker operation and trusted worker runtime wiring remain deferred.
+automatically persisted. Phases 9.1–9.2 define the Celery transport/task and
+trusted worker identity boundaries below; live broker operation remains deferred.
 
 The Phase 9 queue/worker contract must preserve these assumptions:
 
@@ -854,22 +855,22 @@ The Phase 9 queue/worker contract must preserve these assumptions:
    and agents.
 
 The context issuance marker is process-local and is not a serialized
-credential. Phase 9 must establish producer authenticity before creating a
-trusted worker context. It must not add the deferred delivery, persistence,
-recovery, locking, concurrency, or dead-letter guarantees without separately
-designing and validating them.
+credential. The signed job authorization below establishes producer
+authenticity before a worker creates its context. This does not add deferred
+delivery, persistence, recovery, locking, concurrency, or dead-letter guarantees.
 
-## Phase 9.1 — Redis/Celery Infrastructure Boundary
+## Phase 9 — Redis/Celery Boundary and Trusted Distributed Job Identity
 
-Phase 9.1 adds the transport and worker infrastructure boundary without moving
+Phase 9 adds the transport and worker infrastructure boundary without moving
 business behavior out of the Phase 8 executor:
 
 ```text
 CeleryJobSubmissionPort
-  → JSON AIProcessingJobEnvelope
+  → primitive envelope + signed authorization
   → Redis broker (configured, not locally available/validated)
   → Celery task validation
-  → trusted worker runtime hook (not configured yet)
+  → signature, purpose, lifetime and binding verification
+  → TrustedExecutionContext from verified subject
   → AIProcessingJobExecutorService
   → MeetingService / AIProcessingService / existing agents
 ```
@@ -890,22 +891,37 @@ status, and no result persistence/status API is added.
 `AIProcessingJobEnvelope` has exactly four fields: job ID, meeting ID,
 transcript ID, and requested operation names. Pydantic strict validation
 rejects malformed UUIDs, empty/unknown operations, and unexpected fields.
-The Celery adapter sends this primitive JSON payload using the job UUID as the
-Celery task ID. It does not serialize a Python job object,
-`TrustedExecutionContext`, `user_id`, tokens, ORM/session data, or AI results.
-Free-form Phase 8 processing context is not included; Celery submission
-rejects jobs with that field set rather than silently changing their input.
+The Celery adapter sends this primitive JSON envelope plus a separate signed
+authorization using the job UUID as the Celery task ID. It does not serialize
+a Python job object, `TrustedExecutionContext`, access/refresh tokens,
+Authorization headers, passwords, ORM/session data, or AI results. Free-form
+Phase 8 processing context is not included; Celery submission rejects jobs
+with that field set rather than silently changing their input.
 
-The Celery task validates the payload before execution. Worker identity and
-executor construction are supplied through an explicit runtime hook. No
-runtime is configured by default, because this repository does not yet have an
-authenticated producer-to-worker identity mechanism. The task therefore fails
-closed instead of reconstructing `TrustedExecutionContext` from a message or
-trusting a payload `user_id`. When configured in a future increment, the hook
-must return a context issued by the trusted authenticated boundary, construct
-the existing Phase 8 job contract, and invoke the same
-`AIProcessingJobExecutorService`. The task itself has no AI agent or provider
-logic.
+The producer derives the signed subject only from its already-bound trusted
+execution context. The dedicated RS256 authorization contains `sub`, explicit
+`iss`/`aud`, type `background_job_authorization`, `iat`, `exp`, `jti`, and
+job/meeting/transcript/operation bindings. The queue wrapper carries that
+token separately from the unchanged four-field primitive envelope; it does
+not carry context objects or other credentials. The worker validates the
+wrapper and primitive envelope, verifies all claims and exact binding, and
+only then creates `TrustedExecutionContext` from the signed subject. It
+constructs the Phase 8 job and invokes the same executor. Missing/malformed
+keys, invalid/expired signatures, wrong purpose/issuer/audience, and every
+envelope mismatch fail before transcript access. MeetingService ownership
+checks are unchanged. The task itself has no AI agent or provider logic.
+
+Use a dedicated RSA-2048+ key pair via `BACKGROUND_JOB_SIGNING_PRIVATE_KEY`
+and `BACKGROUND_JOB_VERIFICATION_PUBLIC_KEY`. These keys are separate from
+external access-JWT and Gateway-to-Meeting internal-principal keys. Production
+settings reject missing or malformed key material. Local development may omit
+keys, but signed queue submission and verification then remain unavailable.
+The default authorization lifetime is 120 seconds (maximum 300 seconds), with
+five seconds of worker clock-skew allowance. `jti` is unique metadata, not a
+replay ledger: an intact message can be reused for that same job until expiry
+(including the skew allowance). Durable one-time consumption/idempotency is
+deferred until a persistent job store exists; no in-memory cache is claimed as
+distributed replay protection.
 
 Celery 5.4 and Redis client 5.2.1 are already pinned in root
 `requirements.txt`; there are no dependency changes. Redis is not installed or

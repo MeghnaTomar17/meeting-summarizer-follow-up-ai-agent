@@ -10,6 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from jose import jwt
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 AI_ROOT = BACKEND_ROOT / "ai-service"
@@ -44,6 +47,24 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
             "shared.schemas.ai_job_envelope"
         )
         self.submission_module = importlib.import_module("app.celery_submission")
+        self.security = importlib.import_module(
+            "shared.security.background_job_authorization"
+        )
+        self.private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.private_pem = self.private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
+        self.public_pem = self.private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+        other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.other_public_pem = other_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
 
     def tearDown(self) -> None:
         _clear_service_modules()
@@ -178,7 +199,7 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
         published = SimpleNamespace(id=str(job.job_id))
         sender = MagicMock()
         sender.send_task = MagicMock(return_value=published)
-        submission = self.submission_module.CeleryJobSubmissionPort(sender)
+        submission = self.submission_module.CeleryJobSubmissionPort(sender, signing_key=self.private_pem)
 
         receipt = await submission.submit(job)
 
@@ -189,17 +210,33 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(name, "mannerai.process_ai_job")
         self.assertEqual(kwargs["task_id"], str(job.job_id))
         payload = kwargs["args"][0]
-        self.assertEqual(payload["meeting_id"], str(MEETING_ID))
-        self.assertEqual(payload["transcript_id"], str(TRANSCRIPT_ID))
-        for field in ("user_id", "execution_context", "execution_context_id", "access_token"):
+        self.assertEqual(payload["envelope"]["meeting_id"], str(MEETING_ID))
+        self.assertEqual(payload["envelope"]["transcript_id"], str(TRANSCRIPT_ID))
+        self.assertIsInstance(payload["authorization"], str)
+        claims = jwt.decode(
+            payload["authorization"],
+            self.public_pem,
+            algorithms=["RS256"],
+            issuer="ai-service",
+            audience="mannerai-worker",
+        )
+        self.assertEqual(claims["sub"], str(USER_ID))
+        self.assertEqual(claims["job_id"], str(job.job_id))
+        self.assertEqual(claims["type"], "background_job_authorization")
+        for field in (
+            "user_id", "execution_context", "execution_context_id", "access_token",
+            "refresh_token", "password", "password_hash", "authorization_header",
+            "database_session", "orm_object",
+        ):
             self.assertNotIn(field, payload)
+        self.assertNotIn(self.private_pem, str(payload))
         self.assertNotIn("AIProcessingService", str(sender.mock_calls))
 
     async def test_celery_submission_rejects_untrusted_context_and_propagates_broker_error(self):
         job = self._job(context=None)
         sender = MagicMock()
         sender.send_task = MagicMock(return_value=SimpleNamespace(id=str(job.job_id)))
-        submission = self.submission_module.CeleryJobSubmissionPort(sender)
+        submission = self.submission_module.CeleryJobSubmissionPort(sender, signing_key=self.private_pem)
 
         untrusted_job = job.model_copy(
             update={"execution_context": self.context_type(user_id=USER_ID)},
@@ -217,6 +254,25 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
             await submission.submit(job)
         self.assertNotIn("secret", str(raised.exception))
 
+    def test_submission_settings_factory_requires_configured_private_key(self):
+        sender = MagicMock()
+        with self.assertRaises(self.submission_module.CelerySubmissionError):
+            self.submission_module.CeleryJobSubmissionPort.from_settings(
+                sender, SimpleNamespace(background_job_signing_private_key=None)
+            )
+        configured = self.submission_module.CeleryJobSubmissionPort.from_settings(
+            sender,
+            SimpleNamespace(
+                background_job_signing_private_key=__import__("pydantic").SecretStr(
+                    self.private_pem
+                ),
+                background_job_issuer="ai-service",
+                background_job_audience="mannerai-worker",
+                background_job_authorization_expire_seconds=120,
+            ),
+        )
+        self.assertIsInstance(configured, self.submission_module.CeleryJobSubmissionPort)
+
     def test_task_rejects_malformed_and_unconfigured_messages_without_ai_execution(self):
         _, _, task_module = self._load_worker_modules()
         task_module.configure_job_execution(None)
@@ -227,17 +283,20 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertNotIn("sensitive-value", str(raised.exception))
         valid_payload = {
-            "job_id": "50000000-0000-0000-0000-000000000005",
-            "meeting_id": str(MEETING_ID),
-            "transcript_id": str(TRANSCRIPT_ID),
-            "requested_operations": ["summary"],
+            "envelope": {
+                "job_id": "50000000-0000-0000-0000-000000000005",
+                "meeting_id": str(MEETING_ID),
+                "transcript_id": str(TRANSCRIPT_ID),
+                "requested_operations": ["summary"],
+            },
+            "authorization": "not-verified-because-runtime-is-unconfigured",
         }
         with self.assertRaises(task_module.TrustedExecutionContextUnavailable):
             task_module.process_ai_job.run(valid_payload)
         with self.assertRaises(task_module.InvalidQueueEnvelopeError):
             task_module.process_ai_job.run(
                 {
-                    **valid_payload,
+                    **valid_payload["envelope"],
                     "user_id": str(USER_ID),
                     "access_token": "must-not-be-accepted",
                 }
@@ -254,7 +313,10 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
         envelope = self.envelope_module.AIProcessingJobEnvelope.model_validate_json(
             __import__("json").dumps(payload)
         )
-        context = self._context()
+        token = self.security.issue_job_authorization(
+            envelope, USER_ID, private_key=self.private_pem
+        )
+        message = {"envelope": payload, "authorization": token}
         executor = SimpleNamespace(execute=AsyncMock())
 
         async def execute(job):
@@ -263,7 +325,10 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
         executor.execute.side_effect = execute
         runtime = SimpleNamespace(
             executor=executor,
-            resolve_execution_context=lambda _: context,
+            verification_key=self.public_pem,
+            authorization_issuer="ai-service",
+            authorization_audience="mannerai-worker",
+            authorization_max_age_seconds=120,
             create_job=lambda incoming, trusted: self.job_module.AIProcessingJob.from_authenticated_context(
                 job_id=incoming.job_id,
                 meeting_id=incoming.meeting_id,
@@ -274,19 +339,19 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
         )
         task_module.configure_job_execution(runtime)
 
-        result = task_module.process_ai_job.run(payload)
+        result = task_module.process_ai_job.run(message)
 
         self.assertEqual(result, {"job_id": payload["job_id"], "status": "failed"})
         executor.execute.assert_awaited_once()
         sent_job = executor.execute.await_args.args[0]
-        self.assertEqual(sent_job.execution_context_id, context.context_id)
+        self.assertTrue(sent_job.execution_context.was_issued_by_authenticated_boundary)
         self.assertEqual(sent_job.execution_principal_id, USER_ID)
         self.assertEqual(sent_job.job_id, envelope.job_id)
 
-        runtime.resolve_execution_context = lambda _: self.context_type(user_id=USER_ID)
+        runtime.verification_key = self.other_public_pem
         executor.execute.reset_mock()
         with self.assertRaises(task_module.TrustedExecutionContextUnavailable):
-            task_module.process_ai_job.run(payload)
+            task_module.process_ai_job.run(message)
         executor.execute.assert_not_awaited()
 
 

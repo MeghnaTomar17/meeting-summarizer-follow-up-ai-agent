@@ -33,4 +33,13 @@ class AIProcessingJobEnvelope(BaseModel):
         return list(dict.fromkeys(operations))
 
 
-__all__ = ["QueueOperation", "AIProcessingJobEnvelope"]
+class AuthorizedAIProcessingJobMessage(BaseModel):
+    """Transport wrapper separating the primitive job from its signed authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    envelope: AIProcessingJobEnvelope
+    authorization: str = Field(min_length=1, max_length=8192)
+
+
+__all__ = ["QueueOperation", "AIProcessingJobEnvelope", "AuthorizedAIProcessingJobMessage"]

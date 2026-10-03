@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import openai
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import BaseModel, SecretStr, ValidationError
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -167,11 +169,18 @@ class OpenAIProviderTestCase(unittest.IsolatedAsyncioTestCase):
                 sdk_factory.assert_not_called()
 
     def test_production_provider_factory_rejects_missing_required_configuration(self):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_key = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
         settings = self.settings_module.AISettings(
             _env_file=None,
             app_env="production",
             openai_api_key=None,
             openai_model=None,
+            background_job_signing_private_key=private_key,
         )
 
         with self.assertRaises(self.errors.ProviderNotConfiguredError):

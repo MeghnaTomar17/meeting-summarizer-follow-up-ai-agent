@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — current AI and process-local job boundary after Phase 8.
+> MannerAI Meetings Platform — current AI and background job boundaries through Phase 9.2.
 
 **Entry point:** For the consolidated current reference and Phase 7 checkpoint, see [project-foundation.md](./project-foundation.md).
 
@@ -45,8 +45,8 @@ has persistence models and a repository, but no automatic AI-to-database path.
 The implemented AI-processing path is synchronous orchestration in-process; it
 does not mean HTTP requests are queued or processed in the background. Phase 8
 adds a separate, framework-neutral submission/execution boundary described
-below. Phase 9.1 defines a Redis/Celery transport boundary, but trusted
-distributed identity wiring and live Redis operation are not yet implemented.
+below. Phases 9.1–9.2 define the Redis/Celery transport and signed distributed
+job identity; live Redis operation and durable job state remain unimplemented.
 Retries, durable job state, public AI endpoints, and frontend workflow
 integration remain future work.
 
@@ -124,19 +124,13 @@ semantics. The existing direct `AIProcessingService` call remains available;
 The Celery adapter introduced in Phase 9.1 is described next; no public job
 endpoint is introduced here.
 
-Phase 9 must authenticate the trusted queue producer and transport only an
-explicitly defined job envelope. A worker must authenticate and validate each
-message before execution, then obtain or reconstruct a trusted execution
-context through a controlled mechanism. It must never trust arbitrary
-`user_id` data from an untrusted producer or accept access/refresh tokens,
-passwords, or provider credentials in the envelope. The worker must invoke this
-same `AIProcessingJobExecutorService` and preserve its lifecycle and sanitized
-error semantics. Authentication and authorization logic must remain outside
-the AI service, orchestrator, and agents. The current context issuance marker
-is intentionally not a serialized credential; producer authenticity must be
-established before the worker creates a context.
+Phase 9's signed producer authorization and worker verification are described
+below. A worker never derives identity from an unsigned queue field; external
+access/refresh credentials, passwords, and provider credentials are excluded
+from the message. Authentication stays outside the AI service, orchestrator,
+and agents.
 
-## Phase 9.1 Redis/Celery transport boundary
+## Phase 9 Redis/Celery transport and signed job identity
 
 Redis is the intended Celery broker. `worker-service` creates a Celery app
 from environment-backed settings without connecting to Redis at import time.
@@ -155,13 +149,37 @@ safe explicit transport schema is defined. The adapter sends through a
 provided Celery publisher and propagates broker errors rather than reporting a
 queued receipt on failure.
 
-The Celery task validates the envelope before asking an injected worker runtime
-to resolve identity, create the existing job contract, and invoke the existing
-`AIProcessingJobExecutorService`. No runtime is configured by default. Until a
-trusted producer/worker identity mechanism exists, valid messages fail closed
-before transcript resolution and AI execution; arbitrary queue `user_id`
-values are never used to create trusted context. The task contains no AI or
-agent business logic. Phase 8's process-local adapter remains available.
+The JSON message contains the unchanged four-field primitive envelope and a
+separate RS256 background-job authorization. The producer signs the
+authenticated user from the already-bound `TrustedExecutionContext`; the
+authorization contains issuer, audience, type, `iat`, short `exp`, unique
+`jti`, authenticated subject, and exact job/meeting/transcript/operation
+bindings. It is a dedicated purpose-specific credential, separate from both
+the external access JWT and Gateway-to-Meeting internal principal.
+
+The worker validates the message schema, verifies signature/issuer/audience,
+purpose and lifetime, and compares every binding before issuing a
+`TrustedExecutionContext`. Only then can it construct the existing job and
+invoke `AIProcessingJobExecutorService`. Missing keys, malformed messages,
+invalid credentials, or mismatches fail closed before transcript lookup and AI
+execution. The task has no AI or agent business logic. MeetingService ownership
+checks remain in the existing transcript provider.
+
+The signing private key and worker verification public key use
+`BACKGROUND_JOB_SIGNING_PRIVATE_KEY` and
+`BACKGROUND_JOB_VERIFICATION_PUBLIC_KEY`. Production settings require valid
+RSA-2048-or-stronger PEM keys. Use a dedicated pair, never external JWT or
+internal-principal keys. Local development may omit keys, in which case
+distributed submission/verification cannot proceed.
+
+The default authorization lifetime is 120 seconds (maximum 300 seconds); the
+worker allows five seconds of clock skew. It is job-bound and cannot authorize
+a different envelope. A captured intact message can still be replayed for the
+same job while valid (including the skew allowance): there is no durable
+job/idempotency store to coordinate one-time consumption. `jti` is unique
+metadata, not replay prevention. Durable replay protection belongs with the
+later persistent job/idempotency system; no process-local cache is claimed as
+distributed protection. Phase 8's process-local adapter remains available.
 
 Celery 5.4 and Redis client 5.2 are already declared in `requirements.txt`; no
 dependency was added. Redis is not installed or running in the current local
