@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — current AI and background job boundaries through Phase 9.2.
+> MannerAI Meetings Platform — current AI and background job boundaries through Phase 9.3.
 
 **Entry point:** For the consolidated current reference and Phase 7 checkpoint, see [project-foundation.md](./project-foundation.md).
 
@@ -45,8 +45,9 @@ has persistence models and a repository, but no automatic AI-to-database path.
 The implemented AI-processing path is synchronous orchestration in-process; it
 does not mean HTTP requests are queued or processed in the background. Phase 8
 adds a separate, framework-neutral submission/execution boundary described
-below. Phases 9.1–9.2 define the Redis/Celery transport and signed distributed
-job identity; live Redis operation and durable job state remain unimplemented.
+below. Phases 9.1–9.3 implement Redis/Celery transport, signed distributed job
+identity, and worker runtime composition. Live Redis validation depends on an
+available broker; durable job state remains unimplemented.
 Retries, durable job state, public AI endpoints, and frontend workflow
 integration remain future work.
 
@@ -186,6 +187,26 @@ dependency was added. Redis is not installed or running in the current local
 environment, so this block validates configuration and mocked task/publisher
 behavior only. It does not claim live broker or worker integration.
 
+At worker startup, a runtime factory composes the existing Phase 8 executor
+with the AI processing service and Meeting Service transcript provider. The
+runtime is not created when importing the Celery app; worker startup configures
+it, and each executed job scopes its database engine/session and model provider
+to that execution. The broker is configured through `CELERY_BROKER_URL`
+(`redis://localhost:6379/1` by default). Connection, socket-connect, and
+socket-operation timeouts default to 5, 5, and 10 seconds.
+
+The worker deliberately acknowledges before execution and does not enable
+worker-loss redelivery. Duplicate publication/manual retry can therefore run
+the same signed job again. There is no durable status store, replay ledger,
+idempotency guarantee, or automatic result persistence.
+
+The opt-in live execution test is
+`RUN_REDIS_CELERY_INTEGRATION=1 python -m unittest backend.tests.test_phase9_3_redis_celery.LiveRedisCeleryExecutionTests -v`.
+It starts a real Celery worker, submits through the signed producer adapter,
+and uses a deterministic model provider while exercising Meeting Service
+ownership checks. It makes no OpenAI calls. Redis is unavailable in the current
+environment, so live broker execution remains unvalidated here.
+
 ## Microservices
 
 | Service | Responsibility |
@@ -194,12 +215,12 @@ behavior only. It does not claim live broker or worker integration.
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
 | ai-service | AIProcessingService, transcript normalization, five agents, injected provider abstraction/OpenAI adapter, orchestration, typed validation and domain mapping; no database or persistence side effects |
 | search-service | Health service; chunking, embeddings, and Qdrant retrieval remain deferred |
-| worker-service | Health service plus Celery configuration/task boundary; trusted distributed execution wiring remains deferred |
+| worker-service | Health service plus Celery configuration, trusted job verification, and Phase 8 execution runtime |
 
 ## Data stores
 
 - **PostgreSQL** — users, refresh sessions, meetings, transcripts, and Phase 5 meeting results; the MeetingInsight schema is defined but awaits migration 0005
-- **Redis** — intended Celery broker; local server not available and no live connection validated
+- **Redis** — Celery broker; local server not available and no live connection validated
 - **Qdrant** — planned vector index; retrieval integration is deferred
 
 ## Persistence layer

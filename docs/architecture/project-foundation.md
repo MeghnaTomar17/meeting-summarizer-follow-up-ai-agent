@@ -1,7 +1,7 @@
 # MannerAI Meetings Platform — Foundation and Current State
 
-> **Current scope:** Phase 0 through **Phase 9.2 trusted distributed job identity**
-> **Current implementation:** Authentication and Meeting Service APIs/persistence, Phase 7 AI processing, Phase 8 process-local job execution, and Phase 9.1–9.2 Celery transport plus signed job authorization
+> **Current scope:** Phase 0 through **Phase 9.3 live Redis/Celery execution integration**
+> **Current implementation:** Authentication and Meeting Service APIs/persistence, Phase 7 AI processing, Phase 8 job execution, and Phase 9.1–9.3 Celery transport, signed authorization, and worker runtime integration
 > **Maturity:** Production-grade foundation plus a bounded persistence slice; not a fully production-ready platform
 
 This is the current reference for implemented architecture. The later
@@ -17,8 +17,9 @@ provider adapter, transcript normalization, structured-output/domain mapping,
 MeetingInsight schema and repository boundary, `AIProcessingService`, and
 deterministic application-path integration tests. Phase 8 adds a process-local
 job submission/execution boundary that delegates to `AIProcessingService`.
-Phases 9.1–9.2 define the Celery transport/task boundary and signed worker
-identity verification; live Redis operation and durable job state remain deferred.
+Phases 9.1–9.3 implement the Celery transport/task boundary, signed worker
+identity verification, and worker runtime composition. Live Redis operation
+depends on an available broker; durable job state remains deferred.
 Revision `0005_meeting_insights` is defined but unapplied. Public AI API
 exposure, automatic persistence, search, and frontend integration remain
 deferred.
@@ -45,6 +46,7 @@ deferred.
 | 8 | Background Processing Application Boundary | Complete; framework-neutral job contract, executor/submission ports, and process-local FIFO adapter |
 | 9.1 | Redis/Celery Infrastructure Boundary | Implemented; JSON-only envelope, Celery app/configuration, submission and task adapters; trusted distributed identity and live Redis remain unavailable |
 | 9.2 | Trusted Distributed Job Identity | Implemented; purpose-specific RS256 authorization, exact envelope binding and worker verification; durable replay prevention and live Redis remain unavailable |
+| 9.3 | Live Redis/Celery Execution Integration | Implemented; startup runtime composition and opt-in real-broker test; live test not run because Redis is unavailable locally |
 
 ---
 
@@ -837,8 +839,9 @@ This process-local adapter does not guarantee durable jobs, retries,
 at-least-once or exactly-once delivery, crash recovery, distributed locking,
 queue persistence, worker concurrency, or dead-letter handling. Pending jobs
 disappear on process exit. AI results remain return values and are not
-automatically persisted. Phases 9.1–9.2 define the Celery transport/task and
-trusted worker identity boundaries below; live broker operation remains deferred.
+automatically persisted. Phases 9.1–9.3 implement Celery transport, trusted
+worker identity, and runtime composition; live broker validation requires an
+available Redis-compatible service.
 
 The Phase 9 queue/worker contract must preserve these assumptions:
 
@@ -925,10 +928,50 @@ distributed replay protection.
 
 Celery 5.4 and Redis client 5.2.1 are already pinned in root
 `requirements.txt`; there are no dependency changes. Redis is not installed or
-running in this Windows environment. Validation covers configuration, JSON
-envelope behavior, mocked queue dispatch, and fail-closed task behavior only;
-no live Redis/Celery integration is claimed. Phase 8 process-local FIFO
-execution remains available.
+running in this Windows environment. Offline validation covers configuration,
+JSON envelope behavior, mocked queue dispatch, and fail-closed task behavior;
+the opt-in live Redis/Celery test is documented below. Phase 8 process-local
+FIFO execution remains available.
+
+### Phase 9.3 worker runtime and live integration test
+
+The Celery worker now composes the verified envelope runtime at worker startup.
+It creates the existing Phase 8 `AIProcessingJobExecutorService` over the
+AI-processing application service and Meeting Service transcript provider, so
+ownership validation remains in Meeting Service. Celery app import itself
+does not open Redis, PostgreSQL, or an OpenAI connection. The database engine,
+session, and provider resources are scoped to an executed job.
+
+`CELERY_BROKER_URL` defaults to `redis://localhost:6379/1`. Broker connection,
+socket-connect, and socket-operation timeouts default to 5, 5, and 10 seconds.
+No result backend is configured. Tasks acknowledge before execution and do
+not request redelivery when a worker is lost; there is no durable job status,
+replay prevention, automatic retry, or idempotency guarantee.
+
+From the repository root in PowerShell, run a worker with:
+
+```powershell
+$env:PYTHONPATH = "$PWD\backend\worker-service;$PWD\backend"
+.\.venv\Scripts\python.exe -m celery -A worker_queue.celery_app:celery_app worker --pool=solo --concurrency=1 --prefetch-multiplier=1 --loglevel=INFO
+```
+
+Configure `DATABASE_URL`, the dedicated `BACKGROUND_JOB_VERIFICATION_PUBLIC_KEY`,
+and the OpenAI provider settings before processing jobs. The producer must use
+the matching dedicated `BACKGROUND_JOB_SIGNING_PRIVATE_KEY`.
+
+The live integration test is intentionally opt-in and uses no live AI provider:
+
+```powershell
+$env:RUN_REDIS_CELERY_INTEGRATION = "1"
+.\.venv\Scripts\python.exe -m unittest backend.tests.test_phase9_3_redis_celery.LiveRedisCeleryExecutionTests -v
+```
+
+It starts a Celery worker against `CELERY_BROKER_URL`, publishes with the
+production signed submission port, and validates the deterministic AI result
+through the real Phase 8 executor and Meeting Service ownership path. A
+Redis-compatible service must already be available. Redis was unavailable in
+the development environment used for this checkpoint, so the live test was
+not run; offline tests validate the boundary and test harness imports.
 
 ## Phase 3 persistence architecture (historical baseline)
 
@@ -1301,8 +1344,8 @@ meeting-summarizer-follow-up-ai-agent/
 - Automatic persistence invocation after AI processing; the processing service returns domain-ready inputs only
 - Applying and PostgreSQL-validating `0005_meeting_insights`
 - Semantic search and vector indexing
-- Redis/Celery distributed queue and worker integration, retry and delivery/idempotency policy, and worker DB strategy (Phase 9); Phase 8 process-local execution is implemented above
-- Redis client wiring (cache, sessions, broker)
+- Durable Redis/Celery job state, retries, and delivery/idempotency policy; the broker and worker execution path are implemented, while Phase 8 process-local execution remains available
+- Redis client wiring for cache and sessions (Celery broker transport is implemented)
 - Qdrant vector store operations
 - Production AI pipeline/Gateway integration
 - Frontend API clients (scaffolded, throw `NotImplementedError`)

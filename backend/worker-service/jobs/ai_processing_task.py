@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -16,6 +17,8 @@ from shared.schemas.ai_job_envelope import (
 from shared.security.background_job_authorization import verify_job_authorization
 from shared.security.execution_context import TrustedExecutionContext
 from worker_queue.celery_app import celery_app
+
+logger = logging.getLogger("worker.ai_processing")
 
 
 class TrustedExecutionContextUnavailable(RuntimeError):
@@ -53,6 +56,11 @@ def configure_job_execution(runtime: JobExecutionRuntime | None) -> None:
     _execution_runtime = runtime
 
 
+def is_job_execution_configured() -> bool:
+    """Whether this process has a trusted worker runtime installed."""
+    return _execution_runtime is not None
+
+
 def _validate_message(payload: object) -> tuple[AIProcessingJobEnvelope, str]:
     try:
         wire_json = json.dumps(payload, allow_nan=False, separators=(",", ":"))
@@ -82,6 +90,15 @@ def execute_job_envelope(payload: object) -> dict[str, str]:
             max_age_seconds=runtime.authorization_max_age_seconds,
         )
     except Exception:
+        logger.warning(
+            "ai_job_authorization_rejected",
+            extra={
+                "event": "ai_job_authorization_rejected",
+                "job_id": str(envelope.job_id),
+                "meeting_id": str(envelope.meeting_id),
+                "failure_category": "authorization_invalid",
+            },
+        )
         raise TrustedExecutionContextUnavailable(
             "The queue job authorization is invalid."
         ) from None
@@ -107,8 +124,41 @@ def execute_job_envelope(payload: object) -> dict[str, str]:
     ):
         raise InvalidQueueEnvelopeError("The trusted job does not match its envelope.")
 
-    result = asyncio.run(runtime.executor.execute(job))
-    return {"job_id": str(result.job_id), "status": result.status.value}
+    logger.info(
+        "ai_job_execution_started",
+        extra={
+            "event": "ai_job_execution_started",
+            "job_id": str(envelope.job_id),
+            "meeting_id": str(envelope.meeting_id),
+        },
+    )
+    try:
+        result = asyncio.run(runtime.executor.execute(job))
+    except Exception:
+        logger.error(
+            "ai_job_execution_failed",
+            extra={
+                "event": "ai_job_execution_failed",
+                "job_id": str(envelope.job_id),
+                "meeting_id": str(envelope.meeting_id),
+                "failure_category": "worker_execution_error",
+            },
+        )
+        raise RuntimeError("The AI processing job could not be executed.") from None
+    status = result.status.value
+    failure = getattr(result, "failure", None)
+    failure_code = getattr(getattr(failure, "code", None), "value", None)
+    logger.info(
+        "ai_job_execution_finished",
+        extra={
+            "event": "ai_job_execution_finished",
+            "job_id": str(envelope.job_id),
+            "meeting_id": str(envelope.meeting_id),
+            "job_status": status,
+            **({"failure_category": failure_code} if failure_code else {}),
+        },
+    )
+    return {"job_id": str(result.job_id), "status": status}
 
 
 @celery_app.task(
@@ -126,6 +176,7 @@ __all__ = [
     "TrustedExecutionContextUnavailable",
     "JobExecutionRuntime",
     "configure_job_execution",
+    "is_job_execution_configured",
     "execute_job_envelope",
     "process_ai_job",
 ]

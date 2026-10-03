@@ -4,7 +4,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 
 ## Status
 
-**Current checkpoint: Phase 9.1 — Redis/Celery boundary.** Phase 8's `JobExecutor` remains the application execution boundary. A Celery app, JSON-only primitive job envelope, and submission/task adapters are defined; the queue never carries `TrustedExecutionContext` or user credentials. Distributed identity reconstruction is deliberately unconfigured, so workers fail closed until a trusted producer/worker mechanism is implemented. No Redis server is running or validated here, and the Celery result backend is disabled. Process-local Phase 8 execution remains available. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
+**Current checkpoint: Phase 9.3 — Live Redis/Celery execution integration.** Celery publishing, signed job authorization, worker runtime bootstrap, and an opt-in Redis-backed end-to-end integration test are implemented. The worker delegates to the existing Phase 8 executor, Meeting Service ownership check, and AI processing path. This machine has no Redis-compatible server available, so live broker execution has not been validated here; the Celery result backend remains disabled. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -14,9 +14,9 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 |-------|----------------|
 | Frontend | React, TypeScript, Vite, TailwindCSS |
 | Backend | FastAPI (microservices) |
-| Data | PostgreSQL for current domain persistence; Redis and Qdrant are future integrations |
+| Data | PostgreSQL for current domain persistence; Redis is the configured Celery broker; Qdrant remains future work |
 | AI | Provider-neutral contracts and five agents; OpenAI adapter implemented; no public processing route |
-| Workers | Phase 8 process-local executor; Phase 9.1 Celery boundary; trusted distributed runtime remains deferred |
+| Workers | Phase 8 executor integrated with the Phase 9 Celery worker and signed identity boundary |
 | Ops | Docker, Docker Compose, Nginx |
 
 ## Structure
@@ -115,7 +115,7 @@ Each service exposes:
 | meeting-service | 8001 | Meeting, transcript, and domain-result APIs and persistence |
 | ai-service | 8002 | Transcript-to-domain-input AI processing; no database persistence side effects |
 | search-service | 8003 | Health probes; embeddings, retrieval, and vector search remain deferred |
-| worker-service | 8004 | Health probes; background worker execution remains deferred |
+| worker-service | 8004 | Health probes and Phase 9 Celery background job execution |
 
 ## Development
 

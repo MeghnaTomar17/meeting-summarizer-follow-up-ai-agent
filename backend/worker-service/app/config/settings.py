@@ -20,6 +20,9 @@ class WorkerSettings(SharedSettings):
     background_job_audience: str = "mannerai-worker"
     background_job_authorization_max_age_seconds: int = Field(default=120, ge=1, le=300)
     celery_broker_url: RedisDsn = "redis://localhost:6379/1"
+    celery_broker_connection_timeout: float = Field(default=5.0, gt=0, le=60)
+    celery_broker_socket_connect_timeout: float = Field(default=5.0, gt=0, le=60)
+    celery_broker_socket_timeout: float = Field(default=10.0, gt=0, le=120)
     celery_task_serializer: Literal["json"] = "json"
     celery_result_serializer: Literal["json"] = "json"
     celery_accept_content: tuple[Literal["json"], ...] = ("json",)

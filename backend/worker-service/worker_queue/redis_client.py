@@ -1,6 +1,6 @@
 """
-Purpose: Redis client for Celery broker/result backend and auxiliary queue operations.
-Future responsibilities: Simple job enqueue, pub/sub job status.
+Purpose: Redis URL access for the Celery broker.
+Connection lifecycle: Celery opens broker connections only when publishing or starting a worker.
 Service ownership: worker-service.
 """
 
@@ -10,5 +10,5 @@ from app.config.settings import get_settings
 
 
 def get_sync_redis_url() -> str:
-    """Return Celery broker Redis URL from worker settings."""
+    """Return the configured broker URL without opening a Redis connection."""
     return str(get_settings().celery_broker_url)
