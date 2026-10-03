@@ -11,4 +11,4 @@ from app.config.settings import get_settings
 
 def get_sync_redis_url() -> str:
     """Return Celery broker Redis URL from worker settings."""
-    return get_settings().celery_broker_url
+    return str(get_settings().celery_broker_url)

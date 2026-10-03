@@ -45,8 +45,10 @@ has persistence models and a repository, but no automatic AI-to-database path.
 The implemented AI-processing path is synchronous orchestration in-process; it
 does not mean HTTP requests are queued or processed in the background. Phase 8
 adds a separate, framework-neutral submission/execution boundary described
-below. Redis/Celery, retries, durable job state, public AI endpoints, and
-frontend workflow integration remain future work.
+below. Phase 9.1 defines a Redis/Celery transport boundary, but trusted
+distributed identity wiring and live Redis operation are not yet implemented.
+Retries, durable job state, public AI endpoints, and frontend workflow
+integration remain future work.
 
 ## Phase 8 job boundary (framework-neutral, in-process)
 
@@ -119,8 +121,8 @@ at-least-once or exactly-once delivery, crash recovery, distributed locking,
 queue persistence, worker concurrency, or dead-letter handling. Pending jobs
 disappear on process exit. The adapter does not add concurrency or retry
 semantics. The existing direct `AIProcessingService` call remains available;
-Redis/Celery adapters belong to Phase 9, and no public job endpoint is
-introduced here.
+The Celery adapter introduced in Phase 9.1 is described next; no public job
+endpoint is introduced here.
 
 Phase 9 must authenticate the trusted queue producer and transport only an
 explicitly defined job envelope. A worker must authenticate and validate each
@@ -134,6 +136,38 @@ the AI service, orchestrator, and agents. The current context issuance marker
 is intentionally not a serialized credential; producer authenticity must be
 established before the worker creates a context.
 
+## Phase 9.1 Redis/Celery transport boundary
+
+Redis is the intended Celery broker. `worker-service` creates a Celery app
+from environment-backed settings without connecting to Redis at import time.
+Tasks accept JSON only, use UTC, default to one worker process and a prefetch
+multiplier of one, and acknowledge before execution. No Celery result backend
+is configured: Celery is the delivery/orchestration layer, while the existing
+executor owns the application lifecycle and typed result semantics. Celery
+task state is not treated as the job's business status.
+
+`AIProcessingJobEnvelope` is a strict primitive message containing only the
+job, meeting, and transcript UUIDs and requested operation names. It rejects
+unknown fields and invalid identifiers/operations. It excludes
+`TrustedExecutionContext`, `user_id`, tokens, ORM state, and AI results. Free
+form job context is also rejected by the Celery submission adapter until a
+safe explicit transport schema is defined. The adapter sends through a
+provided Celery publisher and propagates broker errors rather than reporting a
+queued receipt on failure.
+
+The Celery task validates the envelope before asking an injected worker runtime
+to resolve identity, create the existing job contract, and invoke the existing
+`AIProcessingJobExecutorService`. No runtime is configured by default. Until a
+trusted producer/worker identity mechanism exists, valid messages fail closed
+before transcript resolution and AI execution; arbitrary queue `user_id`
+values are never used to create trusted context. The task contains no AI or
+agent business logic. Phase 8's process-local adapter remains available.
+
+Celery 5.4 and Redis client 5.2 are already declared in `requirements.txt`; no
+dependency was added. Redis is not installed or running in the current local
+environment, so this block validates configuration and mocked task/publisher
+behavior only. It does not claim live broker or worker integration.
+
 ## Microservices
 
 | Service | Responsibility |
@@ -142,12 +176,12 @@ established before the worker creates a context.
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
 | ai-service | AIProcessingService, transcript normalization, five agents, injected provider abstraction/OpenAI adapter, orchestration, typed validation and domain mapping; no database or persistence side effects |
 | search-service | Health service; chunking, embeddings, and Qdrant retrieval remain deferred |
-| worker-service | Health service; distributed Celery worker execution remains deferred to Phase 9 |
+| worker-service | Health service plus Celery configuration/task boundary; trusted distributed execution wiring remains deferred |
 
 ## Data stores
 
 - **PostgreSQL** — users, refresh sessions, meetings, transcripts, and Phase 5 meeting results; the MeetingInsight schema is defined but awaits migration 0005
-- **Redis** — configured for future cache/broker use; not wired to AI processing
+- **Redis** — intended Celery broker; local server not available and no live connection validated
 - **Qdrant** — planned vector index; retrieval integration is deferred
 
 ## Persistence layer
@@ -248,7 +282,7 @@ For the detailed, current reference see [project-foundation.md](./project-founda
 - Sequence diagrams for upload → process → index flow
 - Organization membership and authorization for organization-wide listing
 - Public AI processing API and production Gateway integration
-- Redis/Celery queue and worker integration, retry policy, and delivery/idempotency guarantees (Phase 9)
+- Live Redis/Celery worker runtime and trusted identity integration, retry policy, and delivery/idempotency guarantees (Phase 9)
 - Semantic search, Qdrant/RAG, analytics, and frontend AI workflow
 - Applying and PostgreSQL-validating migration `0005_meeting_insights`; it is defined but unapplied
 - Docker/infrastructure work, Gmail integration, and later roadmap phases

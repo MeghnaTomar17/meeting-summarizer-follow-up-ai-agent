@@ -163,6 +163,7 @@ class AIProcessingJob(BaseModel):
     def from_authenticated_context(
         cls,
         *,
+        job_id: UUID | None = None,
         meeting_id: UUID,
         transcript_id: UUID,
         requested_operations: list[ProcessingOperation],
@@ -177,6 +178,7 @@ class AIProcessingJob(BaseModel):
         ):
             raise TypeError("A trusted execution context is required.")
         return cls(
+            **({"job_id": job_id} if job_id is not None else {}),
             meeting_id=meeting_id,
             transcript_id=transcript_id,
             requested_operations=requested_operations,

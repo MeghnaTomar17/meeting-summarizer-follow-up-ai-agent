@@ -4,7 +4,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 
 ## Status
 
-**Current checkpoint: Phase 8 complete — background-processing application boundary.** An authenticated Gateway context is bound to each job; the process-local FIFO adapter dispatches it through `MeetingService` ownership enforcement and the existing transcript normalization, AI orchestration, agents, and typed mapping path. AI processing and agents receive no authentication context, and AI results are not automatically persisted. This is an in-process integration only: jobs are not durable, and retries, delivery guarantees, crash recovery, locking, worker concurrency, and dead-letter handling are not implemented. Redis/Celery queue and worker integration is Phase 9. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
+**Current checkpoint: Phase 9.1 — Redis/Celery boundary.** Phase 8's `JobExecutor` remains the application execution boundary. A Celery app, JSON-only primitive job envelope, and submission/task adapters are defined; the queue never carries `TrustedExecutionContext` or user credentials. Distributed identity reconstruction is deliberately unconfigured, so workers fail closed until a trusted producer/worker mechanism is implemented. No Redis server is running or validated here, and the Celery result backend is disabled. Process-local Phase 8 execution remains available. See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -16,7 +16,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 | Backend | FastAPI (microservices) |
 | Data | PostgreSQL for current domain persistence; Redis and Qdrant are future integrations |
 | AI | Provider-neutral contracts and five agents; OpenAI adapter implemented; no public processing route |
-| Workers | Phase 8 process-local executor; Redis/Celery queue and worker integration deferred to Phase 9 |
+| Workers | Phase 8 process-local executor; Phase 9.1 Celery boundary; trusted distributed runtime remains deferred |
 | Ops | Docker, Docker Compose, Nginx |
 
 ## Structure
