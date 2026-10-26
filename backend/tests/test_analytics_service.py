@@ -38,6 +38,9 @@ class _Result:
     def all(self):
         return self._rows
 
+    def scalars(self):
+        return SimpleNamespace(all=lambda: self._rows)
+
 
 class AnalyticsServiceTests(unittest.TestCase):
     def setUp(self):
@@ -108,6 +111,70 @@ class AnalyticsServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             asyncio.run(service.overview(uuid.uuid4(), weeks=1))
         repository.get_overview.assert_not_awaited()
+
+    def test_upcoming_followups_uses_utc_clock_and_returns_safe_paginated_items(self):
+        service_type = importlib.import_module("app.services.analytics_service").AnalyticsService
+        owner_id = uuid.uuid4()
+        now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
+        followup = SimpleNamespace(
+            id=uuid.uuid4(), meeting_id=uuid.uuid4(), subject="Send recap",
+            scheduled_at=datetime(2026, 10, 26, tzinfo=timezone.utc), status="scheduled",
+            body_html="private body", recipients=["private@example.com"],
+        )
+        repository = SimpleNamespace(
+            get_upcoming_followups=AsyncMock(return_value=([followup], 6))
+        )
+        result = asyncio.run(
+            service_type(repository, clock=lambda: now).upcoming_followups(
+                owner_id, page=2, page_size=5
+            )
+        )
+        repository.get_upcoming_followups.assert_awaited_once_with(
+            owner_id, as_of=now, offset=5, limit=5
+        )
+        self.assertEqual((result.pagination.total, result.pagination.total_pages), (6, 2))
+        self.assertEqual(result.items[0].subject, "Send recap")
+        self.assertNotIn("body_html", result.items[0].model_dump())
+        self.assertNotIn("recipients", result.items[0].model_dump())
+
+        empty_repository = SimpleNamespace(
+            get_upcoming_followups=AsyncMock(return_value=([], 0))
+        )
+        empty = asyncio.run(
+            service_type(empty_repository, clock=lambda: now).upcoming_followups(owner_id)
+        )
+        self.assertEqual(empty.items, [])
+        self.assertEqual(empty.pagination.total, 0)
+
+    def test_upcoming_followup_repository_scopes_owner_status_time_and_page(self):
+        _prepare_meeting_imports()
+        from app.repositories.analytics_repository import AnalyticsRepository
+
+        owner_id = uuid.uuid4()
+        now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
+        row = SimpleNamespace(id=uuid.uuid4())
+        session = SimpleNamespace(execute=AsyncMock(side_effect=[
+            _Result(scalar=1), _Result(rows=[row])
+        ]))
+        result, total = asyncio.run(
+            AnalyticsRepository(session).get_upcoming_followups(
+                owner_id, as_of=now, offset=5, limit=5
+            )
+        )
+        self.assertEqual((result, total), ([row], 1))
+        compiled = [call.args[0].compile() for call in session.execute.await_args_list]
+        statements = [statement.string.lower() for statement in compiled]
+        for statement, sql in zip(compiled, statements):
+            self.assertIn("join meetings", sql)
+            self.assertIn("meetings.created_by", sql)
+            self.assertIn("followups.status =", sql)
+            self.assertIn("followups.scheduled_at >", sql)
+            self.assertIn(owner_id, statement.params.values())
+            self.assertIn(now, statement.params.values())
+            self.assertIn("scheduled", statement.params.values())
+        self.assertIn("order by followups.scheduled_at asc, followups.id asc", statements[1])
+        self.assertIn("limit", statements[1])
+        self.assertIn("offset", statements[1])
 
     def test_repository_uses_separate_owner_scoped_aggregates_without_fanout(self):
         _prepare_meeting_imports()

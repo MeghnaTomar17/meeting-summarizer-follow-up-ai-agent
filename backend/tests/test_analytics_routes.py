@@ -40,6 +40,7 @@ class AnalyticsRouteTests(unittest.TestCase):
         self.service.recurring_blockers = AsyncMock()
         self.service.task_completion_trends = AsyncMock()
         self.service.speaker_participation = AsyncMock()
+        self.service.upcoming_followups = AsyncMock()
         self.app.dependency_overrides[self.route.get_analytics_service] = lambda: self.service
         self.app.dependency_overrides[self.auth.get_authenticated_user_id] = lambda: self.owner_id
         self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -71,6 +72,26 @@ class AnalyticsRouteTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 422)
         self.assertEqual(self.service.overview.await_count, 1)
 
+    def test_upcoming_followups_uses_principal_owner_and_bounded_pagination(self):
+        from shared.schemas.analytics import UpcomingFollowupsResponse
+
+        self.service.upcoming_followups.return_value = UpcomingFollowupsResponse(
+            items=[],
+            pagination={"page": 2, "page_size": 3, "total": 0, "total_pages": 0},
+        )
+        response = self.client.get(
+            "/analytics/upcoming-followups?page=2&page_size=3&owner_id=" + str(uuid.uuid4())
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.service.upcoming_followups.assert_awaited_once_with(
+            self.owner_id, page=2, page_size=3
+        )
+        self.assertEqual(
+            self.client.get("/analytics/upcoming-followups?page_size=101").status_code,
+            422,
+        )
+        self.assertEqual(self.service.upcoming_followups.await_count, 1)
+
     def test_missing_or_invalid_internal_principal_is_rejected(self):
         self.app.dependency_overrides.pop(self.auth.get_authenticated_user_id)
         self.assertEqual(self.client.get("/analytics/overview").status_code, 401)
@@ -83,6 +104,7 @@ class AnalyticsRouteTests(unittest.TestCase):
         self.service.recurring_blockers.assert_not_awaited()
         self.service.task_completion_trends.assert_not_awaited()
         self.service.speaker_participation.assert_not_awaited()
+        self.service.upcoming_followups.assert_not_awaited()
 
     def test_trends_route_uses_principal_and_validates_bounded_parameters(self):
         from shared.schemas.analytics import AnalyticsTrendsResponse

@@ -25,7 +25,9 @@ from shared.schemas.analytics import (
     MAX_SPEAKER_MEETING_LIMIT,
     SpeakerParticipationResponse,
     TaskCompletionTrendsResponse,
+    UpcomingFollowupsResponse,
 )
+from shared.schemas.pagination import PaginationParams
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -44,6 +46,18 @@ async def analytics_overview(
 ) -> AnalyticsOverviewResponse:
     """Return dashboard aggregates scoped to the signed principal's owner."""
     return await service.overview(owner_id, weeks=weeks)
+
+
+@router.get("/upcoming-followups", response_model=UpcomingFollowupsResponse)
+async def upcoming_followups(
+    pagination: PaginationParams = Depends(),
+    owner_id: UUID = Depends(get_authenticated_user_id),
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> UpcomingFollowupsResponse:
+    """Return the signed principal owner's scheduled future follow-ups."""
+    return await service.upcoming_followups(
+        owner_id, page=pagination.page, page_size=pagination.page_size
+    )
 
 
 @router.get("/trends", response_model=AnalyticsTrendsResponse)

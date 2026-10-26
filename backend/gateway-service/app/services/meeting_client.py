@@ -34,6 +34,7 @@ from shared.schemas.analytics import (
     RecurringBlockersResponse,
     SpeakerParticipationResponse,
     TaskCompletionTrendsResponse,
+    UpcomingFollowupsResponse,
 )
 from shared.security.internal_principal import create_internal_principal
 
@@ -157,6 +158,23 @@ class MeetingServiceClient:
             "GET", f"/analytics/overview?weeks={weeks}", None, user_id, request_id
         )
         return AnalyticsOverviewResponse.model_validate(response)
+
+    async def get_upcoming_followups(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> UpcomingFollowupsResponse:
+        response = await self._request(
+            "GET",
+            f"/analytics/upcoming-followups?page={page}&page_size={page_size}",
+            None,
+            user_id,
+            request_id,
+        )
+        return UpcomingFollowupsResponse.model_validate(response)
 
     async def get_analytics_trends(
         self,

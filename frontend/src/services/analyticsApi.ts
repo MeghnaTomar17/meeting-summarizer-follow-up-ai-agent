@@ -1,13 +1,27 @@
-/**
- * Purpose: HTTP client for analytics and insights.
- * Future responsibilities: overview metrics, per-meeting insights.
- * Service ownership: Frontend → gateway-service /analytics.
- */
+import { apiClient } from "../utils/apiClient";
 
-// TODO: Implement analyticsApi
+export interface AnalyticsOverview {
+  total_meetings: number;
+  open_tasks: number;
+  completed_tasks: number;
+  decisions: number;
+}
+
+export interface UpcomingFollowup {
+  id: string;
+  meeting_id: string;
+  subject: string;
+  scheduled_at: string;
+  status: "scheduled";
+}
+
+export interface PaginatedUpcomingFollowups {
+  items: UpcomingFollowup[];
+  pagination: { page: number; page_size: number; total: number; total_pages: number };
+}
 
 export const analyticsApi = {
-  getOverview: async (): Promise<unknown> => {
-    throw new Error("Not implemented");
-  },
+  getOverview: () => apiClient.get<AnalyticsOverview>("analytics/overview"),
+  getUpcomingFollowups: () =>
+    apiClient.get<PaginatedUpcomingFollowups>("analytics/upcoming-followups?page=1&page_size=5"),
 };

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.jobs.lifecycle import JobStatus
 from shared.schemas.followup import FollowupStatus
 from shared.schemas.meeting import MeetingStatus
+from shared.schemas.pagination import PaginatedResponse
 
 DEFAULT_ANALYTICS_WEEKS = 12
 MAX_ANALYTICS_WEEKS = 52
@@ -21,6 +22,21 @@ MAX_BLOCKER_EVIDENCE_PER_GROUP = 100
 DEFAULT_SPEAKER_MEETING_LIMIT = 50
 MAX_SPEAKER_MEETING_LIMIT = 100
 MAX_SPEAKERS_PER_MEETING = 50
+
+
+class UpcomingFollowupItem(BaseModel):
+    """Dashboard-safe metadata for a scheduled follow-up in the future."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    meeting_id: UUID
+    subject: str
+    scheduled_at: datetime
+    status: Literal["scheduled"]
+
+
+UpcomingFollowupsResponse = PaginatedResponse[UpcomingFollowupItem]
 
 
 class WeeklyMeetingCount(BaseModel):

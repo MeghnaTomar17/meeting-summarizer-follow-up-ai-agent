@@ -53,6 +53,25 @@ h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 2.25rem); letter-spacing: -.045em;
 .placeholder-card { padding: clamp(24px, 5vw, 48px); border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 .placeholder-card > p:not(.eyebrow) { max-width: 620px; color: var(--muted); line-height: 1.6; }
 .muted { font-size: .9rem; }
+.dashboard { display: grid; gap: 26px; }
+.dashboard-heading, .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dashboard-heading .muted { margin: 8px 0 0; color: var(--muted); }
+.metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+.metric-card, .followups-panel { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.metric-card h2 { margin: 0; color: var(--muted); font-size: .85rem; font-weight: 650; }
+.metric-card p { margin: 18px 0 0; font-size: clamp(1.8rem, 4vw, 2.4rem); font-weight: 750; letter-spacing: -.04em; }
+.followups-panel h2 { margin: 0; font-size: 1.15rem; }
+.followups-panel .eyebrow { margin-bottom: 5px; }
+.followup-list { margin: 18px 0 0; padding: 0; list-style: none; }
+.followup-list li { display: flex; justify-content: space-between; gap: 18px; padding: 15px 0; border-top: 1px solid var(--line); }
+.followup-list time { flex: 0 0 auto; color: var(--muted); font-size: .9rem; }
+.followup-subject { overflow-wrap: anywhere; font-weight: 600; }
+.dashboard-empty { margin: 18px 0 2px; padding: 22px; border-radius: 10px; color: var(--muted); background: #f6f8fc; text-align: center; }
+.dashboard-message { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.dashboard-error { border-color: #efc5cb; }
+.dashboard-error p { margin: 0; color: #a51d2d; }
+@media (max-width: 900px) { .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } .metric-card { padding: 16px; } .metric-card h2 { min-height: 2.4em; } .followup-list li { flex-direction: column; gap: 6px; } .dashboard-heading, .panel-heading { align-items: flex-start; } }
 
 @media (max-width: 760px) {
   .topbar { flex-wrap: wrap; padding: 14px 18px; }

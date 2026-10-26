@@ -49,6 +49,7 @@ class GatewayAnalyticsTests(unittest.TestCase):
         self.meeting_client.get_recurring_blockers = AsyncMock()
         self.meeting_client.get_task_completion_trends = AsyncMock()
         self.meeting_client.get_speaker_participation = AsyncMock()
+        self.meeting_client.get_upcoming_followups = AsyncMock()
         self.app.dependency_overrides[self.route.get_meeting_client] = lambda: self.meeting_client
         self.app.dependency_overrides[self.auth.get_current_user] = lambda: self.user
         self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -95,6 +96,27 @@ class GatewayAnalyticsTests(unittest.TestCase):
         self.meeting_client.get_recurring_blockers.assert_not_awaited()
         self.meeting_client.get_task_completion_trends.assert_not_awaited()
         self.meeting_client.get_speaker_participation.assert_not_awaited()
+        self.meeting_client.get_upcoming_followups.assert_not_awaited()
+
+    def test_upcoming_followups_route_forwards_owner_pagination_and_request_id(self):
+        from shared.schemas.analytics import UpcomingFollowupsResponse
+
+        self.meeting_client.get_upcoming_followups.return_value = UpcomingFollowupsResponse(
+            items=[], pagination={"page": 1, "page_size": 5, "total": 0, "total_pages": 0}
+        )
+        response = self.client.get(
+            "/api/v1/analytics/upcoming-followups?page=1&page_size=5",
+            headers={"X-Request-ID": "upcoming-followups-1"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.meeting_client.get_upcoming_followups.assert_awaited_once_with(
+            page=1, page_size=5, user_id=self.user.id, request_id="upcoming-followups-1"
+        )
+        self.assertEqual(
+            self.client.get("/api/v1/analytics/upcoming-followups?page_size=101").status_code,
+            422,
+        )
+        self.assertEqual(self.meeting_client.get_upcoming_followups.await_count, 1)
 
     def test_openapi_exposes_mounted_overview_endpoint(self):
         schema = self.app.openapi()
@@ -103,6 +125,7 @@ class GatewayAnalyticsTests(unittest.TestCase):
         self.assertIn("/api/v1/analytics/recurring-blockers", schema["paths"])
         self.assertIn("/api/v1/analytics/task-completion-trends", schema["paths"])
         self.assertIn("/api/v1/analytics/speaker-participation", schema["paths"])
+        self.assertIn("/api/v1/analytics/upcoming-followups", schema["paths"])
 
     def test_trends_route_forwards_owner_bounds_and_request_id(self):
         from shared.schemas.analytics import AnalyticsTrendsResponse
@@ -290,6 +313,80 @@ class GatewayAnalyticsTests(unittest.TestCase):
             audience="meeting-service",
         )
         self.assertEqual(identity, self.user.id)
+
+    def test_meeting_client_signs_upcoming_followups_and_propagates_request_id(self):
+        from cryptography.hazmat.primitives import serialization
+        from httpx import Response
+        from shared.security.internal_principal import verify_internal_principal
+        from app.config.settings import GatewaySettings
+        from app.services.meeting_client import MeetingServiceClient
+
+        settings = GatewaySettings(_env_file=None)
+        private_key = serialization.load_pem_private_key(
+            settings.internal_principal_private_key.get_secret_value().encode(), password=None
+        )
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode()
+        client_module = importlib.import_module("app.services.meeting_client")
+        downstream = MagicMock()
+        downstream.request = AsyncMock(return_value=Response(200, json={
+            "items": [], "pagination": {"page": 2, "page_size": 7, "total": 0, "total_pages": 0}
+        }))
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=downstream)
+        context.__aexit__ = AsyncMock(return_value=False)
+        client = MeetingServiceClient(settings)
+
+        async def invoke():
+            with patch.object(client_module.httpx, "AsyncClient", return_value=context):
+                return await client.get_upcoming_followups(
+                    page=2, page_size=7, user_id=self.user.id,
+                    request_id="upcoming-followups-internal-1",
+                )
+
+        from shared.schemas.analytics import UpcomingFollowupsResponse
+        result = asyncio.run(invoke())
+        self.assertIsInstance(result, UpcomingFollowupsResponse)
+        args, kwargs = downstream.request.await_args
+        self.assertEqual(args, ("GET", "/analytics/upcoming-followups?page=2&page_size=7"))
+        self.assertEqual(kwargs["headers"]["X-Request-ID"], "upcoming-followups-internal-1")
+        principal = kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        self.assertEqual(
+            verify_internal_principal(
+                principal, public_key=public_pem,
+                algorithm=settings.internal_principal_algorithm,
+                issuer=settings.internal_principal_issuer, audience="meeting-service",
+            ),
+            self.user.id,
+        )
+
+    def test_meeting_client_sanitizes_upcoming_followups_downstream_failure(self):
+        from app.config.settings import GatewaySettings
+        from app.services.meeting_client import MeetingServiceClient
+        from httpx import Response
+        from shared.exceptions.common import ServiceUnavailableError
+
+        settings = GatewaySettings(_env_file=None)
+        client_module = importlib.import_module("app.services.meeting_client")
+        downstream = MagicMock()
+        downstream.request = AsyncMock(return_value=Response(500, json={
+            "error": {"message": "database_password=do-not-return"}
+        }))
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=downstream)
+        context.__aexit__ = AsyncMock(return_value=False)
+        client = MeetingServiceClient(settings)
+
+        async def invoke():
+            with patch.object(client_module.httpx, "AsyncClient", return_value=context):
+                return await client.get_upcoming_followups(
+                    page=1, page_size=5, user_id=self.user.id, request_id=None
+                )
+
+        with self.assertRaises(ServiceUnavailableError) as raised:
+            asyncio.run(invoke())
+        self.assertEqual(str(raised.exception), "Meeting service is unavailable.")
 
     def test_meeting_client_sanitizes_trends_downstream_failures(self):
         from app.config.settings import GatewaySettings

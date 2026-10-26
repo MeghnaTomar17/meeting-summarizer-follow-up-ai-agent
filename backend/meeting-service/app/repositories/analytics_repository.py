@@ -26,6 +26,7 @@ from shared.schemas.analytics import (
     MAX_SPEAKERS_PER_MEETING,
     MAX_RECURRING_BLOCKERS,
 )
+from shared.schemas.followup import FollowupStatus
 
 
 class AnalyticsRepository:
@@ -33,6 +34,36 @@ class AnalyticsRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get_upcoming_followups(
+        self,
+        owner_id: UUID,
+        *,
+        as_of: datetime,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[Followup], int]:
+        """Return scheduled future follow-ups for meetings owned by this user."""
+        filters = (
+            Meeting.created_by == owner_id,
+            Followup.status == FollowupStatus.SCHEDULED,
+            Followup.scheduled_at.is_not(None),
+            Followup.scheduled_at > as_of,
+        )
+        total = await self._scalar(
+            select(func.count(Followup.id))
+            .join(Meeting, Followup.meeting_id == Meeting.id)
+            .where(*filters)
+        )
+        result = await self._session.execute(
+            select(Followup)
+            .join(Meeting, Followup.meeting_id == Meeting.id)
+            .where(*filters)
+            .order_by(Followup.scheduled_at.asc(), Followup.id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(result.scalars().all()), total
 
     async def get_overview(
         self,

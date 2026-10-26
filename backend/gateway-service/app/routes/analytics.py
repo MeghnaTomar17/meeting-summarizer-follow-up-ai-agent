@@ -19,7 +19,9 @@ from shared.schemas.analytics import (
     MAX_SPEAKER_MEETING_LIMIT,
     SpeakerParticipationResponse,
     TaskCompletionTrendsResponse,
+    UpcomingFollowupsResponse,
 )
+from shared.schemas.pagination import PaginationParams
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -38,6 +40,22 @@ async def analytics_overview(
     """Proxy owner-scoped analytics through Meeting Service."""
     return await client.get_analytics_overview(
         weeks=weeks,
+        user_id=current_user.id,
+        request_id=_request_id(request),
+    )
+
+
+@router.get("/upcoming-followups", response_model=UpcomingFollowupsResponse)
+async def upcoming_followups(
+    request: Request,
+    pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
+    client: MeetingServiceClient = Depends(get_meeting_client),
+) -> UpcomingFollowupsResponse:
+    """Proxy a bounded owner-scoped upcoming-follow-up list."""
+    return await client.get_upcoming_followups(
+        page=pagination.page,
+        page_size=pagination.page_size,
         user_id=current_user.id,
         request_id=_request_id(request),
     )

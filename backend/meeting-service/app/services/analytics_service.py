@@ -17,6 +17,8 @@ from shared.schemas.analytics import (
     MAX_SPEAKER_MEETING_LIMIT,
     MAX_ANALYTICS_WEEKS,
     AnalyticsOverviewResponse,
+    UpcomingFollowupItem,
+    UpcomingFollowupsResponse,
     AnalyticsTrendsResponse,
     BlockerEvidenceReference,
     RecurringBlocker,
@@ -33,6 +35,8 @@ from shared.schemas.analytics import (
 from shared.schemas.followup import FollowupStatus
 from shared.schemas.meeting import MeetingStatus
 from shared.schemas.task import TaskStatus
+from shared.schemas.pagination import build_paginated_response
+from shared.api.constants import MAX_PAGE_SIZE
 
 class AnalyticsService:
     """Build a bounded UTC calendar-week response from repository aggregates."""
@@ -92,6 +96,38 @@ class AnalyticsService:
             processing_job_status_counts={
                 status: job_status_counts.get(status, 0) for status in JobStatus
             },
+        )
+
+    async def upcoming_followups(
+        self, owner_id: UUID, *, page: int = 1, page_size: int = 20
+    ) -> UpcomingFollowupsResponse:
+        """List bounded future scheduled follow-ups under the authenticated owner."""
+        if page < 1 or page_size < 1 or page_size > MAX_PAGE_SIZE:
+            raise ValueError(
+                f"page and page_size must be positive and page_size <= {MAX_PAGE_SIZE}."
+            )
+        as_of = self._clock()
+        if as_of.utcoffset() is None:
+            raise ValueError("Analytics clock must return a timezone-aware datetime.")
+        as_of = as_of.astimezone(timezone.utc)
+        rows, total = await self._repository.get_upcoming_followups(
+            owner_id,
+            as_of=as_of,
+            offset=(page - 1) * page_size,
+            limit=page_size,
+        )
+        items = [
+            UpcomingFollowupItem(
+                id=row.id,
+                meeting_id=row.meeting_id,
+                subject=row.subject,
+                scheduled_at=row.scheduled_at,
+                status="scheduled",
+            )
+            for row in rows
+        ]
+        return build_paginated_response(
+            items, page=page, page_size=page_size, total=total
         )
 
     async def trends(
