@@ -4,7 +4,8 @@
 > `0003_refresh_sessions`; meeting/transcript entries are created by
 > `0001_meetings_transcripts`; Phase 5 result-table indexes are created by
 > `0004_meeting_domain_results` (applied to the configured development DB).
-> The `0005_meeting_insights` index is defined in code and remains unapplied.
+> The `0005_meeting_insights` and `0006_processing_jobs` indexes are applied at
+> the configured PostgreSQL head.
 
 | Table       | Index fields                    | Type     | Notes                        |
 |-------------|---------------------------------|----------|------------------------------|
@@ -22,6 +23,9 @@
 | decisions   | meeting_id (`ix_decisions_meeting_id`) | BTREE | Decision timeline |
 | followups   | meeting_id (`ix_followups_meeting_id`) | BTREE | Follow-up drafts |
 | meeting_insights | meeting_id (`ix_meeting_insights_meeting_id`) | BTREE | Meeting-scoped insight listing |
+| processing_jobs | status, created_at (`ix_processing_jobs_status_created_at`) | BTREE | Lifecycle scans and operational listing |
+| processing_jobs | owner_id, created_at (`ix_processing_jobs_owner_created_at`) | BTREE | Owner-scoped lifecycle lookup |
+| processing_jobs | meeting_id (`ix_processing_jobs_meeting_id`) | BTREE | Meeting-scoped lifecycle lookup |
 
 <!-- TODO: GIN index on transcripts.segments for JSONB search if needed -->
 <!-- TODO: pg_trgm extension for fuzzy title search -->

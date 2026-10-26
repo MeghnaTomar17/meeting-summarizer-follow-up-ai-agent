@@ -1,6 +1,6 @@
 # Database Architecture
 
-> MannerAI Meetings Platform — PostgreSQL persistence boundary and schema definitions through Phase 7.
+> MannerAI Meetings Platform — PostgreSQL persistence and Phase 10.1 vector-index boundary.
 
 ## Stack
 
@@ -28,12 +28,12 @@ PostgreSQL
 | Pydantic API schemas | `backend/shared/schemas/` (separate layer) |
 
 **Current ownership:** gateway-service initializes PostgreSQL for users and
-refresh sessions; meeting-service initializes it for meetings, transcripts,
-summaries, tasks, decisions, and follow-ups. MeetingInsight ORM/schema and
-repository support are defined in Meeting Service, but its migration is
-unapplied and its table is not assumed to exist in the current database. Both
-services use the shared async engine/session infrastructure and canonical
-Alembic schema for applied migrations.
+refresh sessions; meeting-service owns meetings, transcripts, summaries,
+tasks, decisions, follow-ups, and MeetingInsight persistence; the shared job
+lifecycle owns `processing_jobs`. The configured Phase 9 PostgreSQL database
+is at Alembic head `0006_processing_jobs`, including migration 0005. All use
+the canonical Alembic schema. Qdrant is a future derived index and never the
+source of truth for these domain records.
 
 ## Engine vs session
 
@@ -123,10 +123,9 @@ The AI mapper produces `MeetingInsightBase` values with a trusted meeting ID;
 it does not persist them. `MeetingInsightRepository` provides create,
 get-by-ID, and meeting-scoped list queries, flushing writes without committing.
 There is no insight-specific domain service or public route. Revision
-`0005_meeting_insights` defines the schema but is currently unapplied and has
-not been validated against PostgreSQL. Applying it remains a deliberate future
-database action; the presence of ORM metadata does not mean the live database
-contains the table.
+`0005_meeting_insights` is applied in the current PostgreSQL schema at head
+`0006_processing_jobs`; the AI service still does not automatically persist
+mapped outputs.
 
 ### Result indexes and query behavior
 
@@ -315,3 +314,35 @@ CREATE DATABASE mannerai_meetings;
 - UUID primary keys via `UUIDPrimaryKeyMixin`
 - Timestamps via `TimestampMixin` (`TIMESTAMPTZ`)
 - Business models imported in `shared/database/models/__init__.py` for Alembic discovery
+
+## Vector index boundary (through Phase 10.5)
+
+The first Qdrant collection contract is documented in
+[`database/qdrant/collections.md`](../../database/qdrant/collections.md).
+`meeting_chunks` stores normalized transcript text slices and only the source,
+ordering, speaker/time/language, and ownership metadata needed for retrieval.
+It does not duplicate full Meeting, Transcript, User, or domain-result
+entities. The authoritative transcript is fetched from PostgreSQL and passed
+through the shared `normalize_transcript()` path before chunking.
+
+Search Service defines the vector payload, deterministic point ID, embedding
+request/response and model identity contracts, and configuration for collection
+name, dimensions, distance, model identity, and chunk-size target. The current
+configuration defaults are `meeting_chunks`, 1536 dimensions, and cosine
+distance. No PostgreSQL vector table or migration is introduced. Phase 10.4
+adds a Search-owned Qdrant repository with explicit collection initialization
+and configuration validation, transcript-batch upsert/replacement, and
+transcript/meeting deletion. Collection replacement is an upsert followed by
+stale-point deletion and is not atomic; Qdrant failures do not alter the
+PostgreSQL source. The repository is covered by fake-client tests; live Qdrant
+operation remains unverified unless the opt-in integration test is run.
+
+Phase 10.5 queries only with a mandatory `owner_id` filter derived from a
+Gateway-signed Search-audience principal. It does not use `organization_id`
+for authorization because organization membership is not modeled.
+
+Index metadata carries `owner_id` from persisted `Meeting.created_by` and
+`organization_id`. Future retrieval must derive allowed meeting/owner scope
+from the authenticated principal and server-side authorization. Current
+meeting access is creator-based; organization membership is not modeled, so
+organization filtering alone cannot authorize access.

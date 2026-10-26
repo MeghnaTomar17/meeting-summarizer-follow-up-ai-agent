@@ -1,19 +1,18 @@
 # PostgreSQL Tables
 
 > `users`, `refresh_sessions`, `meetings`, `transcripts`, `summaries`, `tasks`,
-> `decisions`, `followups`, and `meeting_insights` are implemented by ORM models in
+> `decisions`, `followups`, `meeting_insights`, and `processing_jobs` are implemented by ORM models in
 > `backend/shared/database/models/`; API DTOs remain in `backend/shared/schemas/`.
 
 ## Implemented schema
 
-The migration chain defines `users`, `refresh_sessions`, `meetings`,
+The migration chain through Phase 9 defines `users`, `refresh_sessions`, `meetings`,
 `transcripts`, `summaries`, `tasks`, `decisions`, `followups`, and
-`meeting_insights`, plus the `meeting_status`, `task_status`, `followup_status`,
-and `meeting_insight_category` enums. The configured local database was last
-verified at `0004_meeting_domain_results (head)`. Revision
-`0005_meeting_insights` is the code head but has not been applied or validated
-against PostgreSQL; the `meeting_insights` table is therefore a defined schema,
-not a claim about the current database contents.
+`meeting_insights`, and `processing_jobs`, plus the `meeting_status`,
+`task_status`, `followup_status`, and `meeting_insight_category` enums. The
+configured PostgreSQL database is at Alembic head `0006_processing_jobs`;
+revisions 0005 and 0006 are applied. The Phase 5 notes below describe the
+historical 0004 checkpoint.
 
 ### meeting_status enum
 
@@ -87,10 +86,10 @@ database and was validated by PostgreSQL integration tests.
 - **Key columns:** `id` (UUID PK), `meeting_id` (FK, cascade delete), `subject`, `body_html`, `recipients` (JSONB email list), `status` (`followup_status`, default `draft`), nullable `scheduled_at` and `sent_at`, `created_at`.
 - **Cardinality:** A meeting has zero or many follow-ups; no unique draft-per-meeting constraint is imposed.
 
-## Defined but unapplied table (Phase 7.4)
+## MeetingInsight table (Phase 7.4)
 
-Revision `0005_meeting_insights` adds the following table definition. It is not
-present in the currently verified database because the migration is unapplied.
+Revision `0005_meeting_insights` adds the following table. It is included in
+the current PostgreSQL schema at head `0006_processing_jobs`.
 
 ### meeting_insights
 
@@ -99,7 +98,20 @@ present in the currently verified database because the migration is unapplied.
 - **Foreign key:** `fk_meeting_insights_meeting_id_meetings` references `meetings.id` with `ON DELETE CASCADE`.
 - **Relationship:** Meeting has zero or many insights; the ORM relationship uses `cascade="all, delete-orphan"`.
 - **Lifecycle/constraints:** Immutable candidate snapshot; no `updated_at`, status, version, run ID, or provider metadata. No category/title uniqueness constraint or semantic deduplication; similar findings from different runs may coexist.
-- **Migration state:** Defined in `0005_meeting_insights`; not yet applied or validated against PostgreSQL.
+- **Migration state:** Applied in `0005_meeting_insights`; subsequently validated as part of the PostgreSQL schema at head 0006.
+
+## Processing jobs (Phase 9.4)
+
+- **Purpose:** Durable application lifecycle for asynchronous AI jobs; PostgreSQL, not Celery task state, is authoritative.
+- **Key columns:** `job_id` (UUID PK), `meeting_id`, `transcript_id`, `owner_id`, requested operations, status, attempt counts, lease token/expiry, retry timing, sanitized failure fields, result, and lifecycle timestamps.
+- **Constraints/indexes:** Status/attempt/lease/completion invariants; indexes support status/creation, owner/creation, and meeting lookup.
+- **Migration state:** Applied and PostgreSQL-validated in `0006_processing_jobs`.
+
+## Vector representation (Phase 10.1)
+
+Transcript chunks are specified as a Qdrant projection in
+[`../qdrant/collections.md`](../qdrant/collections.md), not as PostgreSQL
+domain rows. No PostgreSQL vector table or migration is part of Phase 10.1.
 
 ## Planned tables (not implemented)
 

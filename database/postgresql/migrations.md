@@ -45,7 +45,7 @@ alembic -c alembic.ini revision --autogenerate -m "describe change"
 
 ## Migration head and local database state
 
-The code migration head is `0005_meeting_insights`:
+The current migration head is `0006_processing_jobs`:
 
 ```text
 0001_meetings_transcripts
@@ -53,6 +53,7 @@ The code migration head is `0005_meeting_insights`:
     → 0003_refresh_sessions
       → 0004_meeting_domain_results
         → 0005_meeting_insights
+          → 0006_processing_jobs
 ```
 
 `0001_meetings_transcripts` creates the `meeting_status` enum, meeting and
@@ -62,13 +63,13 @@ adds per-login refresh sessions with hashed tokens, user foreign key, expiry,
 revocation, and lookup/cleanup indexes. Each revision has a reversible
 downgrade.
 
-At the Phase 4 security-testing checkpoint, the configured local database
-reported `0001_meetings_transcripts`; that was a historical observation. At the
-Phase 5 integration checkpoint, after verifying the local development target,
-`alembic upgrade head` applied the pending migrations. The database reported
-`0004_meeting_domain_results (head)`, and `alembic check` found no pending
-upgrade operations at that checkpoint. Phase 7.4 adds revision 0005 in code;
-it has not been run and is pending on that database.
+At the Phase 4 security-testing checkpoint the configured database reported
+`0001_meetings_transcripts`; at the Phase 5 checkpoint it reported
+`0004_meeting_domain_results (head)`. Those are historical observations.
+Phase 9 validation subsequently applied migrations through
+`0006_processing_jobs`; the configured PostgreSQL database was confirmed at
+that head. The Phase 9 integration validated durable job persistence and
+claim/lease transitions against PostgreSQL.
 
 `0004_meeting_domain_results` creates versioned summaries, tasks, decisions,
 and follow-ups with their indexes, foreign keys, and native status enums. Its
@@ -77,10 +78,13 @@ downgrade drops dependent tables/indexes before removing the enums.
 `0005_meeting_insights` is an additive, reversible migration that creates one
 immutable row per insight candidate, with a shared native category enum,
 Meeting cascade foreign key, and a meeting-scope index. Its downgrade drops
-the index and table before the enum. It is defined in the repository but is
-currently **unapplied** and has not been validated against PostgreSQL. No
-`alembic upgrade head` for revision 0005 has been run; PostgreSQL integration
-remains pending until it is deliberately applied to a suitable test database.
+the index and table before the enum. The migration is applied at the current
+database head; its original unapplied status at the Phase 7 checkpoint was
+superseded by the Phase 9 migration run.
+
+`0006_processing_jobs` adds PostgreSQL-owned asynchronous job lifecycle,
+attempt, retry, lease, failure, and result fields with constraints and indexes.
+It is applied and was validated by opt-in PostgreSQL integration tests.
 
 Meeting insight rows have no run/version/replacement semantics in this phase;
 repeated or duplicate-looking findings are preserved. Processing status,

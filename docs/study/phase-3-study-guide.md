@@ -3,14 +3,18 @@
 ## Current elevator pitch
 
 MannerAI is a microservice-oriented meeting-intelligence platform. Through
-Phase 9, it includes authenticated Gateway and Meeting Service persistence,
+Phase 10.5, it includes authenticated Gateway and Meeting Service persistence,
 the typed AI processing path, a Phase 8 executor, and Phase 9 Redis/Celery
 transport with dedicated signed worker authorization and a PostgreSQL-backed
-job lifecycle. PostgreSQL persistence, concurrent claims, lease reclamation,
-stale-token fencing, and terminal results were validated against PostgreSQL.
-Live Redis/Celery execution was not validated because Redis was unavailable.
-Phase 10 — Vector Search & RAG is next; Docker remains deferred. Earlier
-sections below remain study notes for their named phase/checkpoint.
+job lifecycle. Phase 10.1–10.3 add deterministic transcript chunking, a
+provider-neutral embedding boundary, and prepared typed vector-index batches;
+Phase 10.4 adds Search-owned Qdrant persistence, and Phase 10.5 adds
+authenticated owner-filtered retrieval. PostgreSQL remains
+authoritative. PostgreSQL job persistence/fencing was validated against
+PostgreSQL. Embeddings and the Qdrant repository have deterministic/fake-client
+tests without live service calls; live Redis/Celery and Qdrant server operation
+remain unvalidated. RAG and Docker remain deferred. Earlier sections below
+remain study notes for their named phase/checkpoint.
 
 ## Architecture to explain
 
@@ -735,3 +739,126 @@ terminal persistence are validated against PostgreSQL. Live Redis/Celery
 execution remains unvalidated until a Redis-compatible broker is available.
 Docker and Compose changes remain deferred. Phase 9 is complete; Phase 10 —
 Vector Search & RAG is next.
+
+## Phase 10.1 — Vector Search Architecture & Data Model
+
+### Source of truth and content representation
+
+PostgreSQL owns the actual Meeting and Transcript entities. Qdrant is planned
+as a derived retrieval index containing only chunk text and the source,
+ordering, language/time/speaker, and access-filter metadata needed to return
+grounded transcript context. AI agents and Meeting Service repositories do
+not connect to Qdrant.
+
+Search uses the shared `NormalizedTranscript` produced by the same
+`normalize_transcript()` function the AI input adapter uses. That prevents
+different rules for transcript identity, segment-index validation, timestamp
+validation, and order. The current chunker groups complete consecutive
+segments toward a character target (default 2000), leaves an oversized segment
+intact, preserves text, and stores speaker labels as metadata.
+
+### Embeddings and collection contract
+
+`EmbeddingModelIdentity` binds provider, model name, and dimensions.
+`EmbeddingRequest` and `EmbeddingResponse` stay independent of provider SDKs;
+responses must match the declared dimension and contain finite values. The
+`EmbeddingProvider` is a port only, with no live provider implementation in
+10.1.
+
+`SearchSettings` configures the `meeting_chunks` collection, vector dimensions
+(1536 default), distance (`Cosine` default), provider/model identity, Qdrant
+URL/key, and chunk character target. Point identity is a deterministic UUIDv5
+of schema version, meeting ID, transcript ID, and chunk position. Updating
+content at a stable source position can therefore replace the same point;
+re-indexing must remove stale positions if chunk layout changes.
+
+### Ownership and lifecycle
+
+Payload `owner_id` maps to the persisted `Meeting.created_by`; `organization_id`
+is also retained as tenant metadata. Future search scope must come from the
+authenticated identity plus server-side MeetingService authorization, not
+client-provided IDs. Current authorization is creator-based; organization
+membership is not modeled, so organization ID alone is not sufficient
+authorization.
+
+Transcript creation/replacement and content changes require re-indexing from
+the PostgreSQL source. Meeting deletion requires cross-store point cleanup.
+Index failure must not alter the authoritative PostgreSQL transcript. Durable
+retry/reconciliation and atomic replacement remain future lifecycle work.
+
+10.1 defines contracts and deterministic chunking only. There is no Qdrant
+client operation, collection bootstrap, embedding API call, index worker,
+search endpoint, semantic retrieval, or RAG prompt path yet. Qdrant integration
+is not implemented and semantic search does not work in this checkpoint.
+
+## Phase 10.2 — Embedding Provider Abstraction
+
+`EmbeddingService` uses the provider-neutral `EmbeddingProvider` port, with a
+configured OpenAI adapter and sanitized failure types. Configuration reuses
+`OPENAI_API_KEY` as a secret and supports an optional endpoint and timeout.
+The provider has deterministic unit coverage and makes no live API request in
+tests.
+
+## Phase 10.3 — Transcript Chunking & Indexing Preparation
+
+`TranscriptIndexingPipeline` composes canonical transcript normalization,
+`TranscriptChunker`, and `EmbeddingService` to prepare a `TranscriptIndexBatch`.
+Each `TranscriptIndexRecord` contains the deterministic point ID, typed chunk
+payload, embedding model identity, and its paired vector. Owner and
+organization metadata come from a trusted scope resolved by the internal
+caller, not client transcript fields.
+
+Empty transcripts return an empty batch. Otherwise, the pipeline returns all
+chunk records only after the whole embedding response passes count, identity,
+dimension, and finite-value checks. Provider failure aborts the batch; there
+is no partial-result contract. Duplicate point IDs are rejected. A future
+Qdrant re-indexer can compare the batch's complete desired point-ID set with
+stored IDs filtered by transcript identity and remove stale positions. Phase
+10.3 performs no Qdrant I/O, durable indexing job, retrieval, or RAG.
+
+## Phase 10.4 — Qdrant Vector Persistence Integration
+
+`QdrantVectorRepository` is the Search Service persistence boundary. It
+explicitly initializes a configured collection or validates that an existing
+collection has the required unnamed-vector dimensions and distance metric; a
+mismatch raises a controlled error and is never silently recreated. The
+repository accepts the complete typed `TranscriptIndexBatch`, checks model
+identity and dimensions, and writes deterministic UUID point IDs with typed
+chunk and embedding-model metadata. It also deletes by transcript or meeting
+payload filters.
+
+Transcript replacement reads existing point IDs for that transcript, upserts
+the desired records, and then deletes stale IDs. This ordering is not atomic:
+a stale-delete failure can leave extra points until a retry. Qdrant is a
+derived index; failures do not roll back PostgreSQL. Fake-client tests exercise
+repository behavior; the opt-in live-server test is needed to validate a real
+deployment.
+
+This phase does not add a durable indexing worker, search endpoint, retrieval
+authorization, or RAG. Ownership metadata comes from the trusted internal
+indexing scope; future retrieval authorization must derive from the
+authenticated principal and server-side Meeting Service access checks.
+
+## Phase 10.5 — Authenticated Semantic Retrieval
+
+The public Gateway route requires the existing authenticated user dependency.
+Gateway creates a short-lived RS256 internal principal for `search-service`
+with the established `internal_principal` type and issuer. The external access
+token is not forwarded. Search verifies that assertion with its public key and
+derives the only supported scope, `owner_id = verified sub`. Search ignores
+arbitrary identity headers, and strict request DTOs forbid body fields such as
+`owner_id`, `organization_id`, raw filters, and collection names.
+
+The Search use case embeds the one query through the existing configured
+`EmbeddingService`, verifies the configured provider/model/dimensions and
+finite vector values, and calls Qdrant with the configured collection and
+`owner_id` filter in the vector query. It does not create a collection during
+search or fall back to an unfiltered query. Qdrant payloads, point IDs, source
+metadata, and scores are validated before building public results. The score is
+the raw Qdrant score for the configured metric; higher is more similar.
+
+This phase is owner-only because the project has no Organization membership
+authorization model. Tests use fake embeddings and a fake Qdrant client; this
+does not establish live service connectivity. In production the Search runtime
+must be configured with the matching Gateway public key. Gateway keeps the
+private signing key; no Docker configuration was changed for this phase.

@@ -4,7 +4,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 
 ## Status
 
-**Current status: Phase 9 — Redis, Celery, and durable job lifecycle COMPLETE.** PostgreSQL migration `0006_processing_jobs` is applied at Alembic head. The application job record owns lifecycle state, attempts, retry timing, sanitized failures, leases, and results; workers verify dedicated signed authorization before row-locked claims. PostgreSQL persistence, concurrent claims, expired-lease reclamation, stale-token fencing, and terminal-state persistence passed opt-in integration tests. Redis/Celery transport and worker integration are implemented, but live broker execution was not validated because Redis was unavailable in the development environment. No Celery result backend or exactly-once guarantee is provided. **Next: Phase 10 — Vector Search & RAG.** See the [AI processing architecture](docs/architecture/overview.md) and [current project foundation](docs/architecture/project-foundation.md).
+**Current checkpoint: Phase 11 — Block 1: persisted transcript indexing.** The authenticated Gateway indexes a meeting's persisted transcript through Meeting Service ownership checks and Search Service's existing chunking, embedding and Qdrant repository. Search derives owner scope from its verified internal principal. Indexing runs synchronously; durable Celery execution remains unimplemented, and Qdrant replacement is not atomic. Live provider and deployed cross-service integration still require separate verification. See the [API reference](docs/api/README.md), [AI processing architecture](docs/architecture/overview.md), [database guide](docs/database/README.md), and [current project foundation](docs/architecture/project-foundation.md).
 
 **Development mode:** test in a Python virtual environment. Full Docker stack testing is deferred to the final phase.
 
@@ -14,7 +14,7 @@ Meeting intelligence platform project: transcript processing and typed AI summar
 |-------|----------------|
 | Frontend | React, TypeScript, Vite, TailwindCSS |
 | Backend | FastAPI (microservices) |
-| Data | PostgreSQL for current domain persistence; Redis is the configured Celery broker; Qdrant remains future work |
+| Data | PostgreSQL is authoritative; Redis is the configured Celery broker; Search Service persists and owner-filters the derived Qdrant index |
 | AI | Provider-neutral contracts and five agents; OpenAI adapter implemented; no public processing route |
 | Workers | Phase 8 executor integrated with the Phase 9 Celery worker and signed identity boundary |
 | Ops | Docker, Docker Compose, Nginx |
@@ -114,7 +114,7 @@ Each service exposes:
 | gateway-service | 8000 | Authentication and public meeting/domain API routing |
 | meeting-service | 8001 | Meeting, transcript, and domain-result APIs and persistence |
 | ai-service | 8002 | Transcript-to-domain-input AI processing; no database persistence side effects |
-| search-service | 8003 | Health probes; embeddings, retrieval, and vector search remain deferred |
+| search-service | 8003 | Authenticated owner-scoped semantic retrieval from the derived Qdrant index |
 | worker-service | 8004 | Health probes and Phase 9 Celery background job execution |
 
 ## Development

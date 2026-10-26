@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> MannerAI Meetings Platform — current AI and background job boundaries through Phase 9.4.
+> MannerAI Meetings Platform — current AI, background job, and vector data boundaries through Phase 10.6.
 
 **Entry point:** For the consolidated current reference and Phase 7 checkpoint, see [project-foundation.md](./project-foundation.md).
 
@@ -53,6 +53,13 @@ persistence passed opt-in integration tests. Live Redis/Celery worker
 execution remains unvalidated because Redis was unavailable in the development
 environment. Public AI endpoints and frontend workflow integration remain
 future work.
+
+Phase 10.1 defines a Search-owned transcript chunk and vector payload contract.
+Phase 10.2 adds the provider adapter/service boundary, 10.3 prepares complete
+typed batches, 10.4 persists those batches through a Search-owned Qdrant
+repository, and 10.5 adds authenticated owner-scoped retrieval; PostgreSQL
+remains the source of truth.
+See the Phase 10 sections below.
 
 ## Phase 8 job boundary (framework-neutral, in-process)
 
@@ -250,9 +257,9 @@ idempotency. If PostgreSQL is unavailable before a claim or a broker cannot
 schedule an already-persisted retry, a queued record may require operational
 redrive. Redis is only transport; durable lifecycle requires PostgreSQL.
 
-Apply the new forward migration through head before running the worker or
-producer coordinator. The opt-in PostgreSQL integration test requires
-`RUN_POSTGRES_INTEGRATION=1` and a database already migrated through head. The
+The worker and producer coordinator require migration 0006 to be applied. The
+opt-in PostgreSQL integration test requires `RUN_POSTGRES_INTEGRATION=1` and a
+database already migrated through head. The
 opt-in Redis worker test still requires a reachable Redis-compatible broker;
 neither service is started by ordinary tests.
 
@@ -263,6 +270,246 @@ lifecycle tests passed **11/11**; database regressions passed **19 tests**
 (1 skipped), and the Phase 5 PostgreSQL regression passed **1/1**. Live Redis
 execution was not validated. Docker/platform execution remains deferred.
 
+## Phase 10 vector-search architecture and embedding provider (through 10.6)
+
+PostgreSQL remains authoritative for meetings, transcripts, users, and domain
+results. Qdrant is a derived retrieval index containing transcript chunks and
+the metadata required to identify and authorize each source; it is not a
+second copy of Meeting or Transcript entities.
+
+The canonical source is the shared `NormalizedTranscript`, produced from the
+Meeting Service `TranscriptInDB` DTO by `normalize_transcript()`. This keeps
+the established checks and ordering (meeting/transcript binding, unique
+nonnegative segment indices, timestamps, and segment order) in one place for
+both AI and Search. Chunks combine consecutive complete segments toward a
+configurable character target (default 2000); a long segment remains intact.
+Chunk text preserves source text, with speaker names stored as metadata.
+Metadata preserves meeting/transcript IDs, chunk position, each represented
+source segment's index, optional speaker and timestamps, chunk time bounds,
+language, owner, and organization.
+
+Point IDs are deterministic UUIDv5 values over a versioned namespace and
+`meeting_id`, `transcript_id`, and `chunk_index`. A content change at the same
+position therefore has the same point identity. Re-indexing removes stale
+positions for the transcript, and deletion removes points by meeting or
+transcript identity through the repository described below.
+
+`SearchSettings` defines collection name `meeting_chunks`, vector dimension
+(`EMBEDDING_DIMENSIONS`, default 1536), distance (`Cosine` by default), model
+provider/model identity, and chunk-size target. The provider-neutral
+`EmbeddingProvider` request/response contracts bind vectors to that model
+identity and validate dimensionality and finite values. `EmbeddingService`
+accepts text or existing transcript chunks through that boundary. The
+Search-owned OpenAI adapter uses the already-declared SDK dependency;
+provider/model/dimensions are checked and vectors are validated for shape and
+finite values. Credentials stay in `SecretStr` runtime configuration and
+never enter embedding requests, responses, or sanitized failures. The optional
+`EMBEDDING_BASE_URL` and timeout are runtime configuration, not domain metadata.
+
+Payload ownership metadata maps `owner_id` to the persisted
+`Meeting.created_by` and also carries `organization_id`. Future retrieval
+must derive allowed scope from authenticated identity and server-side
+MeetingService authorization; client-supplied IDs cannot establish authority.
+Current Meeting authorization is creator-based, and organization membership
+is not modeled, so organization filtering alone is not an authorization rule.
+No search endpoint or RAG prompt path is part of 10.1.
+
+When transcripts are replaced or edited, the authoritative PostgreSQL
+transcript remains intact and the derived points must be re-indexed; meeting
+deletion requires cross-store point cleanup. Index failure must not roll back
+or corrupt the PostgreSQL source. Durable retry/reconciliation and atomic
+index replacement are later work. A model or dimension change requires a
+compatible collection/rebuild rather than mixing incompatible vectors.
+
+Phase 10.2 adds the configured provider boundary and OpenAI adapter, without a
+live embedding API requirement. Phase 10.3 adds a Search-owned pipeline that
+returns a typed, complete vector-index batch. Provider failure aborts the
+batch; empty transcripts return an empty batch.
+
+Phase 10.4 adds `QdrantVectorRepository`: explicit collection initialization
+and dimension/distance validation, deterministic point upserts, transcript
+replacement by upserting desired points before deleting stale IDs, and
+transcript/meeting filter deletion. These operations are not atomic across
+Qdrant and PostgreSQL; a retry can reconcile point IDs after partial failure.
+The repository has fake-client coverage. The opt-in live Qdrant integration
+test was not run, so server operation is unverified.
+
+Phase 10.5 adds strict shared request/response DTOs, Search-side verification
+of Gateway-signed RS256 internal principals addressed to `search-service`,
+single-query embedding through the existing provider, Qdrant `owner_id`
+filtering, and the public Gateway `POST /api/v1/search` proxy. Search derives
+owner scope only from the verified principal subject; it ignores arbitrary
+identity headers and rejects scope fields in the request body. The Qdrant
+query always includes the mandatory owner filter before vector search. Results
+are validated against the persisted chunk payload and point ID; owner and
+organization metadata, raw payloads, and vectors are not returned.
+
+Current Meeting authorization is creator-based and organization membership is
+not modeled, so retrieval is owner-only. Search requires its own configured
+verification public key in production; Gateway retains the signing private
+key. Docker/Compose wiring was not changed in this block, so production
+deployment must supply the matching Search public key through its runtime
+configuration. Phase 10.6 hardens the Gateway proxy's non-success handling,
+including timeouts and redirects, and adds focused authentication, forwarding,
+and sanitization regression coverage. The opt-in live Qdrant repository test
+verifies deterministic similarity ranking and owner isolation against the local
+server. It does not verify live embedding-provider calls or a deployed
+Gateway-to-Search-to-Qdrant path. Search `/health/ready` remains process-level
+and does not establish provider or Qdrant availability. Durable indexing jobs,
+generated-answer RAG, reranking, and hybrid retrieval remain deferred. Phase 11
+Block 3 below describes how the existing retrieval response can serve as
+retrieval-only RAG context.
+
+### Phase 11 Block 1: persisted transcript indexing
+
+The authenticated Gateway route `POST /api/v1/search/meetings/{meeting_id}/index`
+orchestrates indexing without moving search logic into Meeting Service. It uses
+the existing Gateway-signed `meeting-service` principal to request an internal
+index source. Meeting Service verifies creator ownership, loads the persisted
+transcript from PostgreSQL, and returns it with the meeting's stored
+`organization_id`; the source carries no owner field. The Gateway forwards this
+source to Search using the existing Search-audience principal, and Search
+constructs `TranscriptIndexScope.owner_id` only from the verified token subject.
+The authenticated caller supplies only the meeting ID.
+
+Search runs the existing normalizer/chunker/embedding pipeline synchronously,
+prepares every vector before Qdrant mutation, then uses the repository's
+initialize/upsert-and-prune contract. Provider or preparation failures leave
+the existing point set untouched. A source-not-found or authorization failure
+stops in Meeting Service and cannot become an empty replacement. A genuinely
+empty persisted transcript is a valid empty batch and removes the transcript's
+existing points. Upsert and stale deletion are not atomic; a stale deletion
+failure may leave old and new chunks together until a retry. The worker's
+`run_embedding_job` remains unimplemented, so this block does not claim durable
+background execution. Live provider, PostgreSQL, and deployed
+Gateway-to-Search integration require separate live checks; mocked tests do
+not establish those integrations.
+
+### Phase 11 Block 3: similarity and RAG retrieval scope
+
+The existing authenticated `POST /search` performs vector top-k retrieval at
+the transcript-chunk level for a text query. Qdrant applies the mandatory
+verified-owner filter; the repository validates the stored chunk payload,
+embedding identity, and deterministic chunk ID before returning results with
+raw similarity scores and source provenance. This already provides a
+similarity-search operation, so no alias endpoint is added. The current
+contract does not define chunk-ID-seeded similarity or meeting-level
+aggregation; the latter would require an agreed aggregation and ranking rule.
+
+The same validated result DTO can serve as retrieval-only RAG context: it
+includes relevant chunk text and meeting, transcript, chunk, segment, timing,
+language, and score metadata. No separate context assembly API is necessary
+for that contract. Search does not call an LLM or generate answers. AI Service's
+existing agents process a supplied transcript into typed meeting-domain
+outputs; their current flow does not retrieve Search results. The Phase 11
+roadmap does not say whether RAG means retrieval-only or generated answers, so
+an answer-generation integration would require a scope decision before it is
+designed.
+
+### Phase 12 Block 1: structured cross-meeting evidence
+
+The authenticated Gateway exposes `POST /api/v1/intelligence/structured-data`
+and forwards a bounded query to Meeting Service using a Gateway-signed
+`meeting-service` principal. Meeting Service derives the owner from that
+verified principal and applies `Meeting.created_by` scope to each meetings,
+tasks, decisions, and insights query. The response contains separate pages
+with stable record IDs and meeting provenance. The optional time window uses
+meeting `scheduled_at` and child `created_at` fields; unresolved tasks are
+`open` or `in_progress`, while overdue tasks have `due_at` before the current
+Meeting Service clock and are not `done` or `cancelled`.
+
+This block only exposes structured evidence. It does not resolve project
+entities, identify recurring issues, query Qdrant, call an LLM, or generate
+answers. Project association remains approximate until a product model exists;
+recurrence detection and RAG answer orchestration remain later work. Search
+Service continues to own semantic/vector retrieval.
+
+### Phase 12 Block 2: structured and semantic evidence composition
+
+Gateway's authenticated `POST /api/v1/intelligence/evidence` composes the
+Block 1 structured-data contract with Search Service's existing semantic
+search contract. It passes the Gateway-authenticated user and request ID to
+both clients; each client signs a separate audience-bound internal principal.
+Meeting Service remains responsible for PostgreSQL queries and Search
+Service remains responsible for embeddings, Qdrant queries, and owner
+filtering. Gateway validates both established response schemas and returns a
+typed evidence bundle with structured-record and transcript-chunk provenance.
+
+Failure of either source, or a malformed downstream response, fails the whole
+request with a sanitized service error. Empty sources remain empty. This block
+does not query databases or vector stores directly, invoke an LLM, resolve
+projects, infer missed deadlines, detect recurrence, or generate an answer.
+
+### Phase 12 Block 3: evidence-grounded answers
+
+The authenticated Gateway `POST /api/v1/intelligence/questions` uses the
+Block 2 service to retrieve owner-scoped structured and transcript evidence,
+then calls AI Service with an `ai-service` audience-bound principal and the
+same request ID. AI Service owns prompt construction and generation through
+the existing provider-neutral adapter and structured-output validation path.
+It has no database or Qdrant access. The AI response can refer only to record
+IDs in the supplied bundle; AI Service resolves those IDs back to citation
+metadata from the trusted bundle before returning it.
+
+Empty evidence produces an explicit insufficient-evidence response without a
+provider call. Retrieved transcript content is marked as untrusted data in the
+prompt. Task and time semantics follow the Block 1 definitions. Possible
+recurring themes require cited evidence from distinct meetings, but no numeric
+recurrence threshold is asserted. Project matching remains limited to explicit
+names and meeting titles/descriptions. Citation validation prevents invented
+IDs and metadata substitution; it does not semantically verify every answer
+claim, so generated answers remain bounded by the provider's interpretation.
+
+Gateway derives UTC month boundaries for “this month” questions, applies the
+half-open interval to Block 1 structured queries, and passes the returned
+meeting IDs as an additional Search filter. Search always combines that filter
+with the authenticated owner filter. Overdue and unresolved task questions
+select Block 1's corresponding task filters. Repeated-deadline answers require
+overdue task citations spanning distinct meetings; no recurrence threshold is
+introduced.
+
+### Phase 13 Block 1: dashboard analytics
+
+The authenticated Gateway `GET /analytics/overview` proxies to Meeting
+Service, which owns PostgreSQL aggregate queries. Every metric is scoped by
+joining records to meetings whose `created_by` matches the verified internal
+principal; caller-supplied organization IDs are not used for authorization.
+The response includes all-time meeting/task/decision/follow-up totals, separate
+meeting and processing-job status counts, and a bounded UTC weekly meeting
+series. The series defaults to 12 Monday-based calendar weeks and accepts 1–52
+weeks, including zero-count buckets. Overdue tasks use the Meeting Service UTC
+clock, a strict past-due comparison, and exclude completed or cancelled tasks.
+
+The authenticated Gateway `GET /analytics/trends` adds weekly decision counts,
+meeting frequency, and persisted topic counts. Decision buckets use
+`Decision.created_at`; meeting frequency is the same scheduled-meeting series
+as the overview. Topic trends use each owned meeting's latest summary version,
+bucketed by `Meeting.scheduled_at`. Exact topic strings are lowercased, trimmed,
+and whitespace-collapsed, with duplicates counted once per meeting. Non-string,
+empty, malformed, and over-500-character topic entries are excluded. Similar
+phrases are not merged, and the endpoint does not call an LLM.
+
+The authenticated Gateway `GET /analytics/recurring-blockers` reads persisted
+`blocker` insights through owner-scoped Meeting Service queries. Recurrence
+means an exact description match after trimming, lowercasing, and collapsing
+whitespace, supported by at least two distinct owned meetings; phrases are not
+semantically merged. Each group carries original insight text, stable meeting
+and insight UUIDs, and the insight creation timestamp. Groups are bounded and
+ordered by meeting count then normalized description; evidence is capped per
+group, with truncation reported. This path does not regenerate insights or
+invoke an LLM.
+
+The authenticated Gateway `GET /analytics/task-completion-trends` currently
+reports a capability limitation: Task persists current status and `updated_at`,
+but not a completion timestamp or transition history. The implementation does
+not mislabel `updated_at` as a completion event. The authenticated Gateway
+`GET /analytics/speaker-participation` aggregates valid unique segment indexes
+from owned persisted transcripts in PostgreSQL. It reports segment counts by
+meeting-local speaker label and separates missing, blank, or `unknown` labels;
+it does not infer duration from optional timestamps or identify speakers across
+meetings. Transcript text is not returned, duplicate indexes count once, and
+the meeting and speaker lists are bounded with truncation indicators.
+
 ## Microservices
 
 | Service | Responsibility |
@@ -270,14 +517,14 @@ execution was not validated. Docker/platform execution remains deferred.
 | gateway-service | Auth, routing, validation, public API |
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
 | ai-service | AIProcessingService, transcript normalization, five agents, injected provider abstraction/OpenAI adapter, orchestration, typed validation and domain mapping; no database or persistence side effects |
-| search-service | Health service; chunking, embeddings, and Qdrant retrieval remain deferred |
-| worker-service | Health service plus Celery configuration, trusted job verification, and Phase 8 execution runtime |
+| search-service | Health, deterministic chunking/index preparation, embeddings, Qdrant persistence, and authenticated owner-scoped retrieval |
+| worker-service | Health service plus Celery configuration, trusted job verification, durable Phase 9 lifecycle, and Phase 8 execution runtime |
 
 ## Data stores
 
 - **PostgreSQL** — users, refresh sessions, meetings, transcripts, meeting results, and durable `processing_jobs`; migration `0006_processing_jobs` is applied at head
 - **Redis** — configured Celery broker; live broker execution was not validated because Redis was unavailable
-- **Qdrant** — planned vector index; retrieval integration is deferred
+- **Qdrant** — Search Service repository initializes, persists, and owner-filters the derived `meeting_chunks` index; live local repository retrieval and owner-isolation coverage passed, while deployed service integration remains unverified
 
 ## Persistence layer
 
