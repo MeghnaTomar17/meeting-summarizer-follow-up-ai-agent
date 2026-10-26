@@ -21,11 +21,20 @@ from shared.schemas.meeting import (
     MeetingUpdate,
 )
 from shared.schemas.transcript import TranscriptInDB, TranscriptWrite
+from shared.schemas.transcript_indexing import TranscriptIndexSource
 from shared.schemas.summary import SummaryBase, SummaryInDB
 from shared.schemas.task import TaskBase, TaskInDB, TaskUpdate
 from shared.schemas.decision import DecisionBase, DecisionInDB
 from shared.schemas.followup import FollowupBase, FollowupInDB, FollowupUpdate
 from shared.schemas.pagination import PaginatedResponse
+from shared.schemas.cross_meeting import CrossMeetingDataQuery, CrossMeetingStructuredData
+from shared.schemas.analytics import (
+    AnalyticsOverviewResponse,
+    AnalyticsTrendsResponse,
+    RecurringBlockersResponse,
+    SpeakerParticipationResponse,
+    TaskCompletionTrendsResponse,
+)
 from shared.security.internal_principal import create_internal_principal
 
 
@@ -114,6 +123,95 @@ class MeetingServiceClient:
             "GET", f"/meetings/{meeting_id}/transcript", None, user_id, request_id
         )
         return TranscriptInDB.model_validate(response)
+
+    async def get_transcript_index_source(
+        self, meeting_id: str, *, user_id: UUID, request_id: str | None
+    ) -> TranscriptIndexSource:
+        response = await self._request(
+            "GET", f"/meetings/{meeting_id}/transcript/index-source", None,
+            user_id, request_id,
+        )
+        return TranscriptIndexSource.model_validate(response)
+
+    async def query_cross_meeting_data(
+        self,
+        query: CrossMeetingDataQuery,
+        *,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> CrossMeetingStructuredData:
+        response = await self._request(
+            "POST", "/intelligence/structured-data",
+            query.model_dump(mode="json"), user_id, request_id,
+        )
+        return CrossMeetingStructuredData.model_validate(response)
+
+    async def get_analytics_overview(
+        self,
+        *,
+        weeks: int,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> AnalyticsOverviewResponse:
+        response = await self._request(
+            "GET", f"/analytics/overview?weeks={weeks}", None, user_id, request_id
+        )
+        return AnalyticsOverviewResponse.model_validate(response)
+
+    async def get_analytics_trends(
+        self,
+        *,
+        weeks: int,
+        topics_per_week: int,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> AnalyticsTrendsResponse:
+        response = await self._request(
+            "GET",
+            f"/analytics/trends?weeks={weeks}&topics_per_week={topics_per_week}",
+            None,
+            user_id,
+            request_id,
+        )
+        return AnalyticsTrendsResponse.model_validate(response)
+
+    async def get_recurring_blockers(
+        self,
+        *,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> RecurringBlockersResponse:
+        response = await self._request(
+            "GET", "/analytics/recurring-blockers", None, user_id, request_id
+        )
+        return RecurringBlockersResponse.model_validate(response)
+
+    async def get_task_completion_trends(
+        self,
+        *,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> TaskCompletionTrendsResponse:
+        response = await self._request(
+            "GET", "/analytics/task-completion-trends", None, user_id, request_id
+        )
+        return TaskCompletionTrendsResponse.model_validate(response)
+
+    async def get_speaker_participation(
+        self,
+        *,
+        meetings_limit: int,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> SpeakerParticipationResponse:
+        response = await self._request(
+            "GET",
+            f"/analytics/speaker-participation?meetings_limit={meetings_limit}",
+            None,
+            user_id,
+            request_id,
+        )
+        return SpeakerParticipationResponse.model_validate(response)
 
     async def replace_transcript(
         self,

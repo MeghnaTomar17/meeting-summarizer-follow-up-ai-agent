@@ -61,6 +61,9 @@ class GatewaySettings(SharedSettings):
     meeting_service_url: str = "http://localhost:8001"
     ai_service_url: str = "http://localhost:8002"
     search_service_url: str = "http://localhost:8003"
+    search_service_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    search_service_index_timeout_seconds: float = Field(default=45.0, gt=0, le=120)
+    ai_service_timeout_seconds: float = Field(default=45.0, gt=0, le=120)
 
     @model_validator(mode="after")
     def validate_production_jwt_secret(self) -> GatewaySettings:
