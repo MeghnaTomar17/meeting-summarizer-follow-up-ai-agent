@@ -49,6 +49,7 @@ class TranscriptRouteTestCase(unittest.TestCase):
         self.service = MagicMock()
         self.service.create_transcript = AsyncMock()
         self.service.get_transcript = AsyncMock()
+        self.service.get_transcript_index_source = AsyncMock()
         self.service.replace_transcript = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
         self.app.dependency_overrides[get_authenticated_user_id] = lambda: self.authenticated_user_id
@@ -82,6 +83,21 @@ class TranscriptRouteTestCase(unittest.TestCase):
     def test_transcript_router_is_mounted(self) -> None:
         paths = [route.path for route in self.app.routes]
         self.assertIn("/meetings/{meeting_id}/transcript", paths)
+        self.assertIn("/meetings/{meeting_id}/transcript/index-source", paths)
+
+    def test_index_source_route_uses_verified_owner_and_returns_authoritative_source(self) -> None:
+        meeting_id = uuid.uuid4()
+        transcript = self._transcript(meeting_id)
+        from shared.schemas.transcript_indexing import TranscriptIndexSource
+
+        source = TranscriptIndexSource(transcript=transcript, organization_id=uuid.uuid4())
+        self.service.get_transcript_index_source.return_value = source
+        response = self.client.get(f"/meetings/{meeting_id}/transcript/index-source")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["organization_id"], str(source.organization_id))
+        self.service.get_transcript_index_source.assert_awaited_once_with(
+            str(meeting_id), self.authenticated_user_id,
+        )
 
     def test_create_transcript_adapts_authoritative_path_id_and_returns_dto(self) -> None:
         meeting_id = uuid.uuid4()

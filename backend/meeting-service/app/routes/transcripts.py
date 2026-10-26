@@ -17,6 +17,7 @@ from app.auth.dependencies import get_authenticated_user_id
 from app.routes.meetings import get_meeting_service
 from app.services.meeting_service import MeetingService
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptWrite
+from shared.schemas.transcript_indexing import TranscriptIndexSource
 
 router = APIRouter(prefix="/meetings", tags=["transcripts"])
 
@@ -51,6 +52,19 @@ async def get_transcript(
 ) -> TranscriptInDB:
     """Return a meeting transcript through the meeting application service."""
     return await service.get_transcript(meeting_id, authenticated_user_id)
+
+
+@router.get(
+    "/{meeting_id}/transcript/index-source",
+    response_model=TranscriptIndexSource,
+)
+async def get_transcript_index_source(
+    meeting_id: str,
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
+    service: MeetingService = Depends(get_meeting_service),
+) -> TranscriptIndexSource:
+    """Return indexing input only to a principal authorized for this meeting."""
+    return await service.get_transcript_index_source(meeting_id, authenticated_user_id)
 
 
 @router.put("/{meeting_id}/transcript", response_model=TranscriptInDB)

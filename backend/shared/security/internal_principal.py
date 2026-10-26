@@ -9,6 +9,7 @@ from jose import jwt
 from jose.exceptions import JWTError
 
 _PRINCIPAL_TYPE = "internal_principal"
+SEARCH_SERVICE_AUDIENCE = "search-service"
 
 
 def create_internal_principal(

@@ -372,10 +372,33 @@ class MeetingServiceTestCase(unittest.TestCase):
         result = asyncio.run(self.service.get_transcript(str(transcript.meeting_id), self.user_id))
         self.assertEqual(result.id, str(transcript.id))
         self.session.commit.assert_not_called()
-
         self.transcript_repository.get_by_meeting_id.return_value = None
         with self.assertRaises(self.NotFoundError):
             asyncio.run(self.service.get_transcript(str(meeting.id), self.user_id))
+        self.session.commit.assert_not_called()
+
+    def test_index_source_contains_persisted_transcript_and_meeting_organization(self) -> None:
+        meeting = self._meeting()
+        transcript = self._transcript(meeting.id)
+        self.meeting_repository.get_by_id.return_value = meeting
+        self.transcript_repository.get_by_meeting_id.return_value = transcript
+        source = asyncio.run(
+            self.service.get_transcript_index_source(str(meeting.id), self.user_id)
+        )
+        self.assertEqual(source.organization_id, meeting.organization_id)
+        self.assertEqual(source.transcript.id, str(transcript.id))
+        self.assertFalse(hasattr(source, "owner_id"))
+        self.session.commit.assert_not_called()
+
+    def test_index_source_enforces_meeting_ownership_and_missing_transcript(self) -> None:
+        meeting = self._meeting()
+        self.meeting_repository.get_by_id.return_value = meeting
+        with self.assertRaises(self.ForbiddenError):
+            asyncio.run(self.service.get_transcript_index_source(str(meeting.id), uuid.uuid4()))
+        self.transcript_repository.get_by_meeting_id.assert_not_called()
+        self.transcript_repository.get_by_meeting_id.return_value = None
+        with self.assertRaises(self.NotFoundError):
+            asyncio.run(self.service.get_transcript_index_source(str(meeting.id), self.user_id))
         self.session.commit.assert_not_called()
 
     def test_replace_transcript_maps_segments_and_commits_once(self) -> None:

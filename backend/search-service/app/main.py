@@ -1,14 +1,11 @@
-"""
-Purpose: FastAPI entrypoint for search-service.
-Future responsibilities: Semantic search, indexing status, internal APIs.
-Service ownership: search-service.
-"""
+"""FastAPI entrypoint for Search Service health and authenticated retrieval."""
 
 from __future__ import annotations
 
 from fastapi import FastAPI
 
 from app.config.settings import get_settings
+from app.routes.search import router as search_router
 from shared.utils.health import health_payload
 from shared.utils.service_bootstrap import (
     init_service_logging,
@@ -26,8 +23,7 @@ app = FastAPI(
 
 register_logging_middleware(app)
 register_exception_handlers(app)
-
-# TODO: include_router from app.routes/
+app.include_router(search_router)
 
 
 @app.get("/health")

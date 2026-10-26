@@ -17,6 +17,7 @@ from shared.schemas.meeting import MeetingCreateRequest, MeetingPublic, MeetingU
 from shared.schemas.meeting import MeetingStatus as SchemaMeetingStatus
 from shared.schemas.pagination import PaginatedResponse, build_paginated_response
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
+from shared.schemas.transcript_indexing import TranscriptIndexSource
 
 
 class MeetingService:
@@ -141,6 +142,21 @@ class MeetingService:
         if transcript is None:
             raise NotFoundError("Transcript not found.")
         return self._transcript_to_in_db(transcript)
+
+    async def get_transcript_index_source(
+        self,
+        meeting_id: str,
+        authenticated_user_id: UUID,
+    ) -> TranscriptIndexSource:
+        """Return persisted transcript and authoritative scope after ownership check."""
+        meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
+        transcript = await self._transcript_repository.get_by_meeting_id(meeting.id)
+        if transcript is None:
+            raise NotFoundError("Transcript not found.")
+        return TranscriptIndexSource(
+            transcript=self._transcript_to_in_db(transcript),
+            organization_id=meeting.organization_id,
+        )
 
     async def replace_transcript(
         self,
