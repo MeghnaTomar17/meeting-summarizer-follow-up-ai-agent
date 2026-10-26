@@ -1,13 +1,23 @@
-"""
-Purpose: Generate embeddings for transcript chunks.
-Future responsibilities: Batch processing, provider selection, rate limits.
-Service ownership: search-service.
-"""
+"""Search Service embedding facade retained at the established module path."""
 
 from __future__ import annotations
 
 
-class EmbeddingGenerator:
-    async def generate(self, texts: list[str]) -> list[list[float]]:
-        _ = texts
-        raise NotImplementedError
+from embeddings.contracts import (
+    EmbeddingModelIdentity,
+    EmbeddingProvider,
+    EmbeddingRequest,
+    EmbeddingResponse,
+)
+from embeddings.factory import create_embedding_provider, create_embedding_service
+from embeddings.service import EmbeddingService
+
+__all__ = [
+    "EmbeddingModelIdentity",
+    "EmbeddingProvider",
+    "EmbeddingRequest",
+    "EmbeddingResponse",
+    "EmbeddingService",
+    "create_embedding_provider",
+    "create_embedding_service",
+]
