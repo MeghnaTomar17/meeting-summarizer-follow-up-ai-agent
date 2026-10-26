@@ -1,11 +1,3 @@
-/**
- * Purpose: Meeting analytics and team insights.
- * Future responsibilities: Charts, trends, export.
- * Service ownership: Frontend (analyticsApi).
- */
-
-// TODO: Implement Analytics page
-
-export default function AnalyticsPage(): null {
-  return null;
+export default function AnalyticsPage() {
+  return <section className="placeholder-card"><p className="eyebrow">Phase 14</p><h1>Analytics</h1><p>Meeting and task charts will be implemented in a later Phase 14 block.</p></section>;
 }

@@ -1,19 +1,21 @@
-/**
- * Purpose: HTTP client for authentication endpoints.
- * Future responsibilities: login, register, refresh, logout.
- * Service ownership: Frontend → gateway-service /auth.
- */
+import { apiClient, type AuthTokens } from "../utils/apiClient";
+import type { User } from "../types/user";
 
-// TODO: Implement authApi with fetch/axios and token storage
+export interface SignupInput {
+  email: string;
+  password: string;
+}
 
 export const authApi = {
-  login: async (_email: string, _password: string): Promise<void> => {
-    throw new Error("Not implemented");
-  },
-  register: async (_email: string, _password: string, _fullName?: string): Promise<void> => {
-    throw new Error("Not implemented");
-  },
-  logout: async (): Promise<void> => {
-    throw new Error("Not implemented");
-  },
+  login: (email: string, password: string) =>
+    apiClient.post<AuthTokens>("/auth/login", { email, password }, { authenticated: false }),
+  signup: (input: SignupInput) =>
+    apiClient.post<User>("/auth/signup", input, { authenticated: false }),
+  me: () => apiClient.get<User>("/auth/me"),
+  logout: (refreshToken: string) =>
+    apiClient.post<{ success: boolean }>(
+      "/auth/logout",
+      { refresh_token: refreshToken },
+      { authenticated: false, retryOnUnauthorized: false },
+    ),
 };

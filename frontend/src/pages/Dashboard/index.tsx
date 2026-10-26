@@ -1,11 +1,3 @@
-/**
- * Purpose: Dashboard landing page — meeting overview and quick actions.
- * Future responsibilities: Recent meetings, pending tasks, analytics widgets.
- * Service ownership: Frontend (consumes gateway analytics & meeting APIs).
- */
-
-// TODO: Implement Dashboard page layout and data fetching
-
-export default function DashboardPage(): null {
-  return null;
+export default function DashboardPage() {
+  return <section className="placeholder-card"><p className="eyebrow">Phase 14</p><h1>Dashboard</h1><p>Overview cards will be implemented in the next Phase 14 block.</p></section>;
 }

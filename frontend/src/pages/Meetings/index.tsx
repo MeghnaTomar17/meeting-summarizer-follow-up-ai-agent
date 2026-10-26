@@ -1,11 +1,3 @@
-/**
- * Purpose: Meetings list and detail views.
- * Future responsibilities: CRUD UI, upload flow, transcript viewer.
- * Service ownership: Frontend (meetingApi).
- */
-
-// TODO: Implement Meetings page
-
-export default function MeetingsPage(): null {
-  return null;
+export default function MeetingsPage() {
+  return <section className="placeholder-card"><p className="eyebrow">Phase 14</p><h1>Meetings</h1><p>The meeting list and details will be implemented in a later Phase 14 block.</p></section>;
 }
