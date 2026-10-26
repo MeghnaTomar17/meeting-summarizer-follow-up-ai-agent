@@ -17,6 +17,7 @@ from app.repositories.transcript_repository import TranscriptRepository
 from app.services.meeting_service import MeetingService
 from shared.database.session import get_db_session
 from shared.schemas.meeting import (
+    MeetingCollectionItem,
     MeetingCreateRequest,
     MeetingPublic,
     MeetingStatusUpdate,
@@ -46,6 +47,21 @@ async def create_meeting(
 ) -> MeetingPublic:
     """Create a meeting through the meeting application service."""
     return await service.create_meeting(payload, authenticated_user_id)
+
+
+@router.get("/owned", response_model=PaginatedResponse[MeetingCollectionItem])
+async def list_owned_meetings(
+    pagination: PaginationParams = Depends(),
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
+    service: MeetingService = Depends(get_meeting_service),
+) -> PaginatedResponse[MeetingCollectionItem]:
+    """List meetings and processing metadata for the signed principal's owner."""
+    return await service.list_owned_meetings(
+        authenticated_user_id,
+        page=pagination.page,
+        limit=pagination.page_size,
+        offset=(pagination.page - 1) * pagination.page_size,
+    )
 
 
 @router.get("", response_model=PaginatedResponse[MeetingPublic])

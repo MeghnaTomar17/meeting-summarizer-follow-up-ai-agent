@@ -15,6 +15,7 @@ from shared.exceptions.common import (
     ValidationError,
 )
 from shared.schemas.meeting import (
+    MeetingCollectionItem,
     MeetingCreateRequest,
     MeetingPublic,
     MeetingStatus,
@@ -57,6 +58,23 @@ class MeetingServiceClient:
             "POST", "/meetings", payload.model_dump(mode="json"), user_id, request_id
         )
         return MeetingPublic.model_validate(response)
+
+    async def list_owned_meetings(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> PaginatedResponse[MeetingCollectionItem]:
+        response = await self._request(
+            "GET",
+            f"/meetings/owned?page={page}&page_size={page_size}",
+            None,
+            user_id,
+            request_id,
+        )
+        return PaginatedResponse[MeetingCollectionItem].model_validate(response)
 
     async def get_meeting(
         self, meeting_id: str, *, user_id: UUID, request_id: str | None

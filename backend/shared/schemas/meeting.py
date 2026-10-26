@@ -11,6 +11,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.jobs.lifecycle import JobStatus
+
 
 class MeetingStatus(str, Enum):
     PENDING = "pending"
@@ -74,3 +76,9 @@ class MeetingPublic(MeetingBase):
     status: MeetingStatus = MeetingStatus.PENDING
     created_at: datetime
     updated_at: datetime
+
+
+class MeetingCollectionItem(MeetingPublic):
+    """Meeting list row with the latest durable processing-job status, if any."""
+
+    processing_status: JobStatus | None = None

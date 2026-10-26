@@ -13,7 +13,7 @@ from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingS
 from shared.database.models.transcript import Transcript
 from shared.exceptions.common import ConflictError, ForbiddenError, NotFoundError
 from shared.exceptions.common import ValidationError as AppValidationError
-from shared.schemas.meeting import MeetingCreateRequest, MeetingPublic, MeetingUpdate
+from shared.schemas.meeting import MeetingCollectionItem, MeetingCreateRequest, MeetingPublic, MeetingUpdate
 from shared.schemas.meeting import MeetingStatus as SchemaMeetingStatus
 from shared.schemas.pagination import PaginatedResponse, build_paginated_response
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
@@ -80,6 +80,28 @@ class MeetingService:
             page_size=limit,
             total=total,
         )
+
+    async def list_owned_meetings(
+        self,
+        owner_id: UUID,
+        *,
+        page: int,
+        limit: int,
+        offset: int,
+    ) -> PaginatedResponse[MeetingCollectionItem]:
+        """Return a bounded collection for the authenticated owner only."""
+        rows = await self._meeting_repository.list_by_owner(
+            owner_id, limit=limit, offset=offset
+        )
+        total = await self._meeting_repository.count_by_owner(owner_id)
+        items = [
+            MeetingCollectionItem(
+                **self._meeting_to_public(meeting).model_dump(),
+                processing_status=processing_status,
+            )
+            for meeting, processing_status in rows
+        ]
+        return build_paginated_response(items, page=page, page_size=limit, total=total)
 
     async def update_meeting_status(
         self,

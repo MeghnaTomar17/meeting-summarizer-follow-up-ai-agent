@@ -132,6 +132,33 @@ class RepositoryTestCase(unittest.TestCase):
         self.session.commit.assert_not_called()
         self.session.rollback.assert_not_called()
 
+    def test_owned_meeting_list_scopes_owner_and_selects_latest_owned_job_status(self) -> None:
+        owner_id = uuid.uuid4()
+        meeting = self._meeting()
+        processing_status = "completed"
+        repository = self.MeetingRepository(self.session)
+        rows_result = MagicMock()
+        rows_result.all.return_value = [(meeting, processing_status)]
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 1
+        self.session.execute.side_effect = [rows_result, count_result]
+
+        rows = asyncio.run(repository.list_by_owner(owner_id, limit=20, offset=0))
+        total = asyncio.run(repository.count_by_owner(owner_id))
+        self.assertEqual(rows, [(meeting, processing_status)])
+        self.assertEqual(total, 1)
+        statement = self.session.execute.await_args_list[0].args[0]
+        sql = statement.compile().string.lower()
+        params = statement.compile().params.values()
+        self.assertIn("meetings.created_by", sql)
+        self.assertIn("processing_jobs.owner_id", sql)
+        self.assertIn("processing_jobs.meeting_id = meetings.id", sql)
+        self.assertIn("order by meetings.created_at desc, meetings.id desc", sql)
+        self.assertIn("order by processing_jobs.created_at desc, processing_jobs.job_id desc", sql)
+        self.assertIn(owner_id, params)
+        self.assertIn(20, params)
+        self.assertIn(0, params)
+
     def test_meeting_update_flushes_and_returns_supplied_entity(self) -> None:
         meeting = self._meeting()
         meeting.title = "Updated weekly sync"

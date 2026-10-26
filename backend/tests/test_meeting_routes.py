@@ -50,6 +50,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.service.create_meeting = AsyncMock()
         self.service.get_meeting = AsyncMock()
         self.service.list_meetings = AsyncMock()
+        self.service.list_owned_meetings = AsyncMock()
         self.service.update_meeting = AsyncMock()
         self.service.update_meeting_status = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
@@ -98,6 +99,8 @@ class MeetingRouteTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["error"]["code"], "UNAUTHORIZED")
+        self.assertEqual(self.client.get("/meetings/owned").status_code, 401)
+        self.service.list_owned_meetings.assert_not_awaited()
         self.service.get_meeting.assert_not_called()
 
     def test_create_meeting_returns_created_dto_from_service(self) -> None:
@@ -185,6 +188,28 @@ class MeetingRouteTestCase(unittest.TestCase):
             response.json()["pagination"],
             {"page": 1, "page_size": 20, "total": 0, "total_pages": 0},
         )
+
+    def test_owned_meeting_list_uses_internal_principal_and_bounded_pagination(self) -> None:
+        from shared.jobs.lifecycle import JobStatus
+        from shared.schemas.meeting import MeetingCollectionItem
+        from shared.schemas.pagination import build_paginated_response
+
+        now = datetime.now(timezone.utc)
+        item = MeetingCollectionItem(
+            id=str(uuid.uuid4()), title="Planning", scheduled_at=now, status="ready",
+            created_at=now, updated_at=now, processing_status=JobStatus.COMPLETED,
+        )
+        self.service.list_owned_meetings.return_value = build_paginated_response(
+            [item], page=2, page_size=3, total=4
+        )
+        response = self.client.get("/meetings/owned?page=2&page_size=3&owner_id=" + str(uuid.uuid4()))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["items"][0]["processing_status"], "completed")
+        self.service.list_owned_meetings.assert_awaited_once_with(
+            self.authenticated_user_id, page=2, limit=3, offset=3
+        )
+        self.assertEqual(self.client.get("/meetings/owned?page_size=101").status_code, 422)
+        self.assertEqual(self.service.list_owned_meetings.await_count, 1)
 
     def test_list_meetings_invalid_organization_id_uses_standard_validation_response(
         self,

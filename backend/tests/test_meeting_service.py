@@ -64,6 +64,8 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.meeting_repository.get_by_id = AsyncMock()
         self.meeting_repository.list_by_organization = AsyncMock()
         self.meeting_repository.count_by_organization = AsyncMock()
+        self.meeting_repository.list_by_owner = AsyncMock()
+        self.meeting_repository.count_by_owner = AsyncMock()
         self.meeting_repository.update = AsyncMock()
         self.meeting_repository.update_status = AsyncMock()
         self.transcript_repository.create = AsyncMock()
@@ -180,6 +182,24 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.meeting_repository.count_by_organization.assert_awaited_once_with(
             organization_id
         )
+        self.session.commit.assert_not_called()
+
+    def test_owned_meeting_list_maps_latest_job_status_and_pagination(self) -> None:
+        from shared.jobs.lifecycle import JobStatus
+
+        meeting = self._meeting()
+        self.meeting_repository.list_by_owner.return_value = [(meeting, JobStatus.RUNNING.value)]
+        self.meeting_repository.count_by_owner.return_value = 21
+        result = asyncio.run(self.service.list_owned_meetings(
+            self.user_id, page=2, limit=20, offset=20
+        ))
+        self.assertEqual(result.items[0].id, str(meeting.id))
+        self.assertEqual(result.items[0].processing_status, JobStatus.RUNNING)
+        self.assertEqual(result.pagination.total, 21)
+        self.meeting_repository.list_by_owner.assert_awaited_once_with(
+            self.user_id, limit=20, offset=20
+        )
+        self.meeting_repository.count_by_owner.assert_awaited_once_with(self.user_id)
         self.session.commit.assert_not_called()
 
     def test_update_status_maps_enum_and_commits_once(self) -> None:

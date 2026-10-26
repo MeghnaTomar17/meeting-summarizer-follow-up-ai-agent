@@ -47,6 +47,7 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
         self.meeting_client = MagicMock()
         self.meeting_client.create_meeting = AsyncMock()
         self.meeting_client.get_meeting = AsyncMock()
+        self.meeting_client.list_owned_meetings = AsyncMock()
         self.app.dependency_overrides[client_dependency] = lambda: self.meeting_client
         self.app.dependency_overrides[self.auth_dependency] = lambda: self.user
         self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -103,6 +104,41 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.meeting_client.get_meeting.assert_not_called()
+        self.assertEqual(self.client.get("/api/v1/meetings").status_code, 401)
+        self.meeting_client.list_owned_meetings.assert_not_awaited()
+
+    def test_gateway_meeting_collection_forwards_owner_pagination_and_request_id(self) -> None:
+        from shared.schemas.meeting import MeetingCollectionItem
+        from shared.schemas.pagination import build_paginated_response
+        now = datetime.now(timezone.utc)
+        row = MeetingCollectionItem(
+            id=str(uuid.uuid4()), title="Planning", scheduled_at=now, status="ready",
+            created_at=now, updated_at=now, processing_status="completed",
+        )
+        self.meeting_client.list_owned_meetings.return_value = build_paginated_response(
+            [row], page=2, page_size=4, total=5
+        )
+        response = self.client.get(
+            "/api/v1/meetings?page=2&page_size=4&owner_id=" + str(uuid.uuid4()),
+            headers={"X-Request-ID": "meeting-list-request"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["items"][0]["processing_status"], "completed")
+        self.meeting_client.list_owned_meetings.assert_awaited_once_with(
+            page=2, page_size=4, user_id=self.user.id, request_id="meeting-list-request"
+        )
+        self.assertEqual(self.client.get("/api/v1/meetings?page_size=101").status_code, 422)
+        self.assertEqual(self.meeting_client.list_owned_meetings.await_count, 1)
+
+    def test_gateway_meeting_collection_sanitizes_downstream_error(self) -> None:
+        from shared.exceptions.common import ServiceUnavailableError
+
+        self.meeting_client.list_owned_meetings.side_effect = ServiceUnavailableError(
+            "Meeting service is unavailable."
+        )
+        response = self.client.get("/api/v1/meetings")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn(str(self.user.id), response.text)
 
     def test_client_sends_signed_internal_principal_and_request_id(self) -> None:
         client_module = importlib.import_module("app.services.meeting_client")
@@ -156,6 +192,54 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
                 algorithm="RS256",
                 issuer="gateway-service",
                 audience="meeting-service",
+            ),
+            self.user.id,
+        )
+
+    def test_client_lists_owned_meetings_with_typed_response_and_signed_owner(self) -> None:
+        from shared.security.internal_principal import verify_internal_principal
+        from app.config.settings import GatewaySettings
+
+        settings = GatewaySettings(_env_file=None)
+        private_key = serialization.load_pem_private_key(
+            settings.internal_principal_private_key.get_secret_value().encode(), password=None
+        )
+        public_key = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode()
+        client_module = importlib.import_module("app.services.meeting_client")
+        now = datetime.now(timezone.utc).isoformat()
+        transport = MagicMock()
+        transport.request = AsyncMock(return_value=client_module.httpx.Response(200, json={
+            "items": [{
+                "id": str(uuid.uuid4()), "title": "Planning", "description": None,
+                "scheduled_at": now, "participants": [], "status": "ready",
+                "created_at": now, "updated_at": now, "processing_status": "completed",
+            }],
+            "pagination": {"page": 1, "page_size": 5, "total": 1, "total_pages": 1},
+        }))
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=transport)
+        context.__aexit__ = AsyncMock(return_value=False)
+        service_client = client_module.MeetingServiceClient(settings)
+
+        async def invoke():
+            with patch.object(client_module.httpx, "AsyncClient", return_value=context):
+                return await service_client.list_owned_meetings(
+                    page=1, page_size=5, user_id=self.user.id, request_id="owned-meetings-id"
+                )
+
+        result = asyncio.run(invoke())
+        self.assertEqual(result.items[0].processing_status, "completed")
+        args, kwargs = transport.request.await_args
+        self.assertEqual(args, ("GET", "/meetings/owned?page=1&page_size=5"))
+        self.assertEqual(kwargs["headers"]["X-Request-ID"], "owned-meetings-id")
+        principal = kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        self.assertEqual(
+            verify_internal_principal(
+                principal, public_key=public_key,
+                algorithm=settings.internal_principal_algorithm,
+                issuer=settings.internal_principal_issuer, audience="meeting-service",
             ),
             self.user.id,
         )

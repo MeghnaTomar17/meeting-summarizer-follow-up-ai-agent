@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.database.models.meeting import Meeting, MeetingStatus
+from shared.database.models.processing_job import ProcessingJobRecord
 
 
 class MeetingRepository:
@@ -53,6 +54,39 @@ class MeetingRepository:
             .select_from(Meeting)
             .where(Meeting.organization_id == organization_id)
         )
+        result = await self._session.execute(statement)
+        return result.scalar_one()
+
+    async def list_by_owner(
+        self,
+        owner_id: UUID,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[tuple[Meeting, str | None]]:
+        """List meetings owned by a user with their latest persisted job status."""
+        latest_job_status = (
+            select(ProcessingJobRecord.status)
+            .where(
+                ProcessingJobRecord.meeting_id == Meeting.id,
+                ProcessingJobRecord.owner_id == owner_id,
+            )
+            .order_by(ProcessingJobRecord.created_at.desc(), ProcessingJobRecord.job_id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        statement = (
+            select(Meeting, latest_job_status.label("processing_status"))
+            .where(Meeting.created_by == owner_id)
+            .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return [(row[0], row[1]) for row in result.all()]
+
+    async def count_by_owner(self, owner_id: UUID) -> int:
+        statement = select(func.count()).select_from(Meeting).where(Meeting.created_by == owner_id)
         result = await self._session.execute(statement)
         return result.scalar_one()
 

@@ -13,11 +13,13 @@ from app.config.settings import GatewaySettings, get_settings
 from app.services.meeting_client import MeetingServiceClient
 from shared.database.models.user import User
 from shared.schemas.meeting import (
+    MeetingCollectionItem,
     MeetingCreateRequest,
     MeetingPublic,
     MeetingStatusUpdate,
     MeetingUpdate,
 )
+from shared.schemas.pagination import PaginatedResponse, PaginationParams
 from shared.schemas.transcript import TranscriptInDB, TranscriptWrite
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
@@ -44,6 +46,21 @@ async def create_meeting(
 ) -> MeetingPublic:
     return await client.create_meeting(
         payload,
+        user_id=current_user.id,
+        request_id=_request_id(request),
+    )
+
+
+@router.get("", response_model=PaginatedResponse[MeetingCollectionItem])
+async def list_meetings(
+    request: Request,
+    pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
+    client: MeetingServiceClient = Depends(get_meeting_client),
+) -> PaginatedResponse[MeetingCollectionItem]:
+    return await client.list_owned_meetings(
+        page=pagination.page,
+        page_size=pagination.page_size,
         user_id=current_user.id,
         request_id=_request_id(request),
     )
