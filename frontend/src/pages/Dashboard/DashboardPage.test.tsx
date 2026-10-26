@@ -7,7 +7,7 @@ vi.mock("../../services/analyticsApi", () => ({
   analyticsApi: { getOverview: vi.fn(), getUpcomingFollowups: vi.fn() },
 }));
 
-const overview = { total_meetings: 12, open_tasks: 4, completed_tasks: 7, decisions: 9 };
+const overview = { total_meetings: 12, meetings_per_week: [], open_tasks: 4, completed_tasks: 7, decisions: 9 };
 const emptyFollowups = { items: [], pagination: { page: 1, page_size: 5, total: 0, total_pages: 0 } };
 
 describe("DashboardPage", () => {
