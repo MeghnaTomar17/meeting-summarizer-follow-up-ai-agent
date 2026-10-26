@@ -53,6 +53,8 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.service.list_owned_meetings = AsyncMock()
         self.service.update_meeting = AsyncMock()
         self.service.update_meeting_status = AsyncMock()
+        self.service.list_meeting_insights = AsyncMock()
+        self.service.get_processing_status = AsyncMock()
         self.app.dependency_overrides[self.service_dependency] = lambda: self.service
         self.app.dependency_overrides[get_authenticated_user_id] = lambda: self.authenticated_user_id
         self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -90,6 +92,25 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.assertIn("/meetings", paths)
         self.assertIn("/meetings/{meeting_id}", paths)
         self.assertIn("/meetings/{meeting_id}/status", paths)
+        self.assertIn("/meetings/{meeting_id}/insights", paths)
+        self.assertIn("/meetings/{meeting_id}/processing-status", paths)
+
+    def test_details_resources_require_owned_meeting_before_repository_read(self) -> None:
+        from shared.exceptions.common import ForbiddenError
+        meeting_id = uuid.uuid4()
+        self.service.list_meeting_insights.side_effect = ForbiddenError()
+        response = self.client.get(f"/meetings/{meeting_id}/insights")
+        self.assertEqual(response.status_code, 403)
+        self.service.list_meeting_insights.assert_awaited_once_with(
+            str(meeting_id), self.authenticated_user_id, page=1, page_size=20
+        )
+
+        from shared.schemas.processing_status import MeetingProcessingStatus
+        self.service.get_processing_status.return_value = MeetingProcessingStatus(meeting_id=meeting_id)
+        response = self.client.get(f"/meetings/{meeting_id}/processing-status")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(response.json()["status"])
+        self.service.get_processing_status.assert_awaited_once_with(str(meeting_id), self.authenticated_user_id)
 
     def test_missing_internal_principal_is_unauthorized(self) -> None:
         from app.auth.dependencies import get_authenticated_user_id

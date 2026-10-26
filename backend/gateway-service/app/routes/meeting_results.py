@@ -13,12 +13,24 @@ from shared.schemas.task import TaskBase, TaskCreate, TaskInDB, TaskUpdate, Task
 from shared.schemas.decision import DecisionBase, DecisionCreate, DecisionInDB
 from shared.schemas.followup import FollowupBase, FollowupCreate, FollowupInDB, FollowupUpdate, FollowupStatus
 from shared.schemas.pagination import PaginatedResponse, PaginationParams
+from shared.schemas.meeting_insight import MeetingInsightInDB
+from shared.schemas.processing_status import MeetingProcessingStatus
 
 router = APIRouter(prefix="/meetings/{meeting_id}", tags=["meetings"])
 
 
 def _identity(request: Request, user: User) -> dict[str, object]:
     return {"user_id": user.id, "request_id": _request_id(request)}
+
+
+@router.get("/insights", response_model=PaginatedResponse[MeetingInsightInDB])
+async def list_meeting_insights(meeting_id: str, request: Request, pagination: PaginationParams = Depends(), user: User = Depends(get_current_user), client: MeetingServiceClient = Depends(get_meeting_client)) -> PaginatedResponse[MeetingInsightInDB]:
+    return await client.list_meeting_insights(meeting_id, page=pagination.page, page_size=pagination.page_size, **_identity(request, user))
+
+
+@router.get("/processing-status", response_model=MeetingProcessingStatus)
+async def get_meeting_processing_status(meeting_id: str, request: Request, user: User = Depends(get_current_user), client: MeetingServiceClient = Depends(get_meeting_client)) -> MeetingProcessingStatus:
+    return await client.get_meeting_processing_status(meeting_id, **_identity(request, user))
 
 
 @router.post("/summaries", response_model=SummaryInDB, status_code=status.HTTP_201_CREATED)

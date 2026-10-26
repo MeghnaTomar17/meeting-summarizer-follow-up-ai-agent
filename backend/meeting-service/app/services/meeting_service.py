@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.meeting_repository import MeetingRepository
+from app.repositories.meeting_insight_repository import MeetingInsightRepository
 from app.repositories.transcript_repository import TranscriptRepository
 from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingStatus
 from shared.database.models.transcript import Transcript
@@ -16,6 +17,8 @@ from shared.exceptions.common import ValidationError as AppValidationError
 from shared.schemas.meeting import MeetingCollectionItem, MeetingCreateRequest, MeetingPublic, MeetingUpdate
 from shared.schemas.meeting import MeetingStatus as SchemaMeetingStatus
 from shared.schemas.pagination import PaginatedResponse, build_paginated_response
+from shared.schemas.meeting_insight import MeetingInsightInDB
+from shared.schemas.processing_status import MeetingProcessingStatus
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
 from shared.schemas.transcript_indexing import TranscriptIndexSource
 
@@ -32,6 +35,7 @@ class MeetingService:
         self._session = session
         self._meeting_repository = meeting_repository
         self._transcript_repository = transcript_repository
+        self._insight_repository = MeetingInsightRepository(session)
 
     async def create_meeting(
         self,
@@ -58,6 +62,37 @@ class MeetingService:
     ) -> MeetingPublic:
         meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
         return self._meeting_to_public(meeting)
+
+    async def list_meeting_insights(
+        self, meeting_id: str, owner_id: UUID, *, page: int, page_size: int
+    ) -> PaginatedResponse[MeetingInsightInDB]:
+        meeting = await self.require_owned_meeting(meeting_id, owner_id)
+        records = await self._insight_repository.list_by_meeting_id(meeting.id)
+        items = [
+            MeetingInsightInDB(
+                id=str(record.id), meeting_id=str(record.meeting_id),
+                category=record.category, title=record.title,
+                description=record.description, created_at=record.created_at,
+            )
+            for record in records
+        ]
+        start = (page - 1) * page_size
+        return build_paginated_response(
+            items[start : start + page_size], page=page,
+            page_size=page_size, total=len(items),
+        )
+
+    async def get_processing_status(
+        self, meeting_id: str, owner_id: UUID
+    ) -> MeetingProcessingStatus:
+        meeting = await self.require_owned_meeting(meeting_id, owner_id)
+        job = await self._meeting_repository.latest_processing_job(meeting.id, owner_id)
+        if job is None:
+            return MeetingProcessingStatus(meeting_id=meeting.id)
+        return MeetingProcessingStatus(
+            meeting_id=meeting.id, status=job.status,
+            updated_at=job.updated_at, completed_at=job.completed_at,
+        )
 
     async def list_meetings(
         self,

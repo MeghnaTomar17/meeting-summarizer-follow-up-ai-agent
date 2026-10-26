@@ -90,6 +90,19 @@ class MeetingRepository:
         result = await self._session.execute(statement)
         return result.scalar_one()
 
+    async def latest_processing_job(self, meeting_id: UUID, owner_id: UUID) -> ProcessingJobRecord | None:
+        statement = (
+            select(ProcessingJobRecord)
+            .where(
+                ProcessingJobRecord.meeting_id == meeting_id,
+                ProcessingJobRecord.owner_id == owner_id,
+            )
+            .order_by(ProcessingJobRecord.created_at.desc(), ProcessingJobRecord.job_id.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def update(self, meeting: Meeting) -> Meeting:
         await self._session.flush()
         return meeting

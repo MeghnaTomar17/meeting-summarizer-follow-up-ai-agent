@@ -29,6 +29,8 @@ from shared.schemas.decision import DecisionBase, DecisionInDB
 from shared.schemas.followup import FollowupBase, FollowupInDB, FollowupUpdate
 from shared.schemas.pagination import PaginatedResponse
 from shared.schemas.cross_meeting import CrossMeetingDataQuery, CrossMeetingStructuredData
+from shared.schemas.meeting_insight import MeetingInsightInDB
+from shared.schemas.processing_status import MeetingProcessingStatus
 from shared.schemas.analytics import (
     AnalyticsOverviewResponse,
     AnalyticsTrendsResponse,
@@ -83,6 +85,14 @@ class MeetingServiceClient:
             "GET", f"/meetings/{meeting_id}", None, user_id, request_id
         )
         return MeetingPublic.model_validate(response)
+
+    async def list_meeting_insights(self, meeting_id: str, *, page: int, page_size: int, user_id: UUID, request_id: str | None) -> PaginatedResponse[MeetingInsightInDB]:
+        response = await self._request("GET", f"/meetings/{meeting_id}/insights?page={page}&page_size={page_size}", None, user_id, request_id)
+        return PaginatedResponse[MeetingInsightInDB].model_validate(response)
+
+    async def get_meeting_processing_status(self, meeting_id: str, *, user_id: UUID, request_id: str | None) -> MeetingProcessingStatus:
+        response = await self._request("GET", f"/meetings/{meeting_id}/processing-status", None, user_id, request_id)
+        return MeetingProcessingStatus.model_validate(response)
 
     async def update_meeting(
         self,

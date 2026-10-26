@@ -42,6 +42,8 @@ class GatewayMeetingResultsTestCase(unittest.TestCase):
             "create_followup", "list_followups", "get_followup", "update_followup",
         ):
             setattr(self.client_stub, method, AsyncMock())
+        self.client_stub.list_meeting_insights = AsyncMock()
+        self.client_stub.get_meeting_processing_status = AsyncMock()
         self.app.dependency_overrides[client_dependency] = lambda: self.client_stub
         self.app.dependency_overrides[auth_dependency] = lambda: self.user
         self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -53,6 +55,8 @@ class GatewayMeetingResultsTestCase(unittest.TestCase):
     def test_gateway_exposes_expected_v1_domain_routes(self) -> None:
         paths = self.app.openapi()["paths"]
         for suffix, methods in {
+            "insights": {"get"},
+            "processing-status": {"get"},
             "summaries": {"get", "post"},
             "summaries/latest": {"get"},
             "summaries/{summary_id}": {"get"},
@@ -65,6 +69,32 @@ class GatewayMeetingResultsTestCase(unittest.TestCase):
         }.items():
             path = f"/api/v1/meetings/{{meeting_id}}/{suffix}"
             self.assertTrue(methods.issubset(paths[path].keys()), path)
+
+    def test_insights_and_processing_status_forward_authenticated_identity_and_request_id(self) -> None:
+        from shared.schemas.meeting_insight import MeetingInsightInDB
+        from shared.schemas.pagination import build_paginated_response
+        from shared.schemas.processing_status import MeetingProcessingStatus
+
+        meeting_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        self.client_stub.list_meeting_insights.return_value = build_paginated_response(
+            [MeetingInsightInDB(id=str(uuid.uuid4()), meeting_id=meeting_id, category="risk", title="Risk", description="Schedule risk", created_at=now)],
+            page=1, page_size=20, total=1,
+        )
+        self.client_stub.get_meeting_processing_status.return_value = MeetingProcessingStatus(meeting_id=uuid.UUID(meeting_id), status="running", updated_at=now)
+        headers = {"X-Request-ID": "details-read-1"}
+        insights = self.client.get(f"/api/v1/meetings/{meeting_id}/insights", headers=headers)
+        status_response = self.client.get(f"/api/v1/meetings/{meeting_id}/processing-status", headers=headers)
+        self.assertEqual(insights.status_code, 200, insights.text)
+        self.assertEqual(insights.json()["items"][0]["title"], "Risk")
+        self.assertEqual(status_response.status_code, 200, status_response.text)
+        self.assertEqual(status_response.json()["status"], "running")
+        self.client_stub.list_meeting_insights.assert_awaited_once_with(
+            meeting_id, page=1, page_size=20, user_id=self.user.id, request_id="details-read-1"
+        )
+        self.client_stub.get_meeting_processing_status.assert_awaited_once_with(
+            meeting_id, user_id=self.user.id, request_id="details-read-1"
+        )
 
     def test_public_create_rejects_owner_fields_and_forwards_authenticated_identity(self) -> None:
         from shared.schemas.summary import SummaryInDB

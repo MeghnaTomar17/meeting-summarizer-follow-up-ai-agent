@@ -5,6 +5,8 @@ import AnalyticsPage from "../pages/Analytics";
 import DashboardPage from "../pages/Dashboard";
 import MeetingsPage from "../pages/Meetings";
 import SearchPage from "../pages/Search";
+import MeetingDetailsPage from "../pages/MeetingDetails";
+import UploadPage from "../pages/Upload";
 
 export function ProtectedLayout() {
   const { user, isAuthenticated, logout } = useAuth();
@@ -49,8 +51,8 @@ export const router = createBrowserRouter([
     children: [
       { path: "/dashboard", element: <DashboardPage /> },
       { path: "/meetings", element: <MeetingsPage /> },
-      { path: "/meetings/:meetingId", element: <Placeholder title="Meeting details" description="Transcript, summary, tasks, decisions, insights, and follow-up." /> },
-      { path: "/upload", element: <Placeholder title="Upload a transcript" description="Meeting metadata, transcript upload, and processing status." /> },
+      { path: "/meetings/:meetingId", element: <MeetingDetailsPage /> },
+      { path: "/upload", element: <UploadPage /> },
       { path: "/search", element: <SearchPage /> },
       { path: "/analytics", element: <AnalyticsPage /> },
     ],

@@ -21,6 +21,7 @@ from app.routes.decisions import router as decisions_router
 from app.routes.followups import router as followups_router
 from app.routes.cross_meeting import router as cross_meeting_router
 from app.routes.analytics import router as analytics_router
+from app.routes.meeting_resources import router as meeting_resources_router
 from shared.database.health import check_postgres_connectivity
 from shared.middleware.request_logging import REQUEST_ID_HEADER
 from shared.schemas.errors import ErrorBody, ErrorResponse
@@ -63,6 +64,7 @@ app.include_router(decisions_router)
 app.include_router(followups_router)
 app.include_router(cross_meeting_router)
 app.include_router(analytics_router)
+app.include_router(meeting_resources_router)
 
 # TODO: include_router upload
 # TODO: lifespan — object storage

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import MeetingsPage from "./index";
 import { meetingApi } from "../../services/meetingApi";
 
@@ -26,7 +27,7 @@ describe("MeetingsPage", () => {
     vi.mocked(meetingApi.list).mockResolvedValue({
       items: [meeting], pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
     });
-    render(<MeetingsPage />);
+    render(<MemoryRouter><MeetingsPage /></MemoryRouter>);
     expect(await screen.findByText("Quarterly Planning")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Processing Status" })).toBeInTheDocument();
     expect(screen.getByText("ready")).toBeInTheDocument();
@@ -36,7 +37,7 @@ describe("MeetingsPage", () => {
 
   it("shows a loading state while the request is pending", () => {
     vi.mocked(meetingApi.list).mockReturnValue(new Promise(() => undefined));
-    render(<MeetingsPage />);
+    render(<MemoryRouter><MeetingsPage /></MemoryRouter>);
     expect(screen.getByRole("status")).toHaveTextContent("Loading meetings");
   });
 
@@ -44,7 +45,7 @@ describe("MeetingsPage", () => {
     vi.mocked(meetingApi.list).mockRejectedValueOnce(new Error("offline")).mockResolvedValue({
       items: [meeting], pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
     });
-    render(<MeetingsPage />);
+    render(<MemoryRouter><MeetingsPage /></MemoryRouter>);
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
     expect(await screen.findByText("Quarterly Planning")).toBeInTheDocument();
     expect(meetingApi.list).toHaveBeenCalledTimes(2);
@@ -52,7 +53,7 @@ describe("MeetingsPage", () => {
 
   it("shows an empty collection state", async () => {
     vi.mocked(meetingApi.list).mockResolvedValue(emptyPage);
-    render(<MeetingsPage />);
+    render(<MemoryRouter><MeetingsPage /></MemoryRouter>);
     expect(await screen.findByText("No meetings yet.")).toBeInTheDocument();
   });
 
@@ -60,7 +61,7 @@ describe("MeetingsPage", () => {
     vi.mocked(meetingApi.list)
       .mockResolvedValueOnce({ items: [meeting], pagination: { page: 1, page_size: 20, total: 21, total_pages: 2 } })
       .mockResolvedValueOnce({ items: [{ ...meeting, id: "m2", title: "Retrospective" }], pagination: { page: 2, page_size: 20, total: 21, total_pages: 2 } });
-    render(<MeetingsPage />);
+    render(<MemoryRouter><MeetingsPage /></MemoryRouter>);
     fireEvent.click(await screen.findByRole("button", { name: "Next" }));
     expect(await screen.findByText("Retrospective")).toBeInTheDocument();
     expect(meetingApi.list).toHaveBeenNthCalledWith(2, 2, 20);

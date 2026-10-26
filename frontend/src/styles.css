@@ -101,3 +101,25 @@ h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 2.25rem); letter-spacing: -.045em;
   .auth-card { padding: 26px 20px; }
   .account-menu span { display: none; }
 }
+
+.meetings-actions { display: flex; align-items: center; gap: 10px; }
+.detail-page, .upload-page { display: grid; gap: 22px; }
+.detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.meeting-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 0; }
+.meeting-metadata > div, .detail-section, .upload-form { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.meeting-metadata dt { color: var(--muted); font-size: .8rem; font-weight: 650; }
+.meeting-metadata dd { margin: 7px 0 0; overflow-wrap: anywhere; }
+.detail-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.detail-tabs button { flex: 0 0 auto; padding: 12px 15px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
+.detail-tabs button[aria-selected="true"] { border-bottom-color: var(--brand); color: var(--brand-dark); font-weight: 700; }
+.detail-section h2 { margin-top: 0; font-size: 1.2rem; }
+.detail-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.detail-list li, .transcript-list article { padding: 14px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+.detail-list li p, .transcript-list article p { margin-bottom: 0; }
+.transcript-list { display: grid; gap: 10px; }
+.upload-form { display: grid; gap: 15px; }
+.upload-form label { display: grid; gap: 7px; font-size: .9rem; font-weight: 650; }
+.upload-form input, .upload-form textarea { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #cbd4e1; border-radius: 8px; background: #fff; color: var(--ink); }
+.upload-form textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.upload-form .field-hint { margin: -8px 0 0; }
+@media (max-width: 620px) { .meeting-metadata { grid-template-columns: 1fr; } .detail-heading, .meetings-actions { align-items: flex-start; } .meetings-actions { flex-direction: column; } }
