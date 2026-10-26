@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.config.settings import get_settings
+from app.routes import router as internal_router
 from shared.utils.health import health_payload
 from shared.utils.service_bootstrap import (
     init_service_logging,
@@ -21,14 +22,13 @@ init_service_logging(get_settings)
 app = FastAPI(
     title="MannerAI AI Service",
     version="0.1.0",
-    description="Internal AI processing foundation; provider execution is not implemented.",
+    description="Internal AI processing and evidence-grounded answer generation.",
 )
 
 register_logging_middleware(app)
 register_exception_handlers(app)
 
-# Processing routes are deferred until the internal invocation/authentication
-# contract is defined. This service is not mounted on the public Gateway.
+app.include_router(internal_router)
 
 
 @app.get("/health")

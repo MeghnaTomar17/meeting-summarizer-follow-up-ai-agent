@@ -181,6 +181,10 @@ class OpenAIProviderTestCase(unittest.IsolatedAsyncioTestCase):
             openai_api_key=None,
             openai_model=None,
             background_job_signing_private_key=private_key,
+            internal_principal_public_key=key.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            ).decode(),
         )
 
         with self.assertRaises(self.errors.ProviderNotConfiguredError):

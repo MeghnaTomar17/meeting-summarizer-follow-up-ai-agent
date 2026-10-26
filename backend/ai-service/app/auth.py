@@ -1,0 +1,33 @@
+"""Gateway signed-principal authentication for AI Service internal APIs."""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose.exceptions import JWTError
+
+from app.config.settings import AISettings, get_settings
+from shared.exceptions.common import UnauthorizedError
+from shared.security.internal_principal import verify_internal_principal
+
+security = HTTPBearer(auto_error=False)
+
+
+async def get_authenticated_user_id(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    settings: AISettings = Depends(get_settings),
+) -> UUID:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise UnauthorizedError()
+    try:
+        return verify_internal_principal(
+            credentials.credentials,
+            public_key=settings.internal_principal_public_key,
+            algorithm=settings.internal_principal_algorithm,
+            issuer=settings.internal_principal_issuer,
+            audience="ai-service",
+        )
+    except (JWTError, ValueError):
+        raise UnauthorizedError() from None
