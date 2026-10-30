@@ -13,6 +13,7 @@ from app.auth.jwt import create_access_token
 from app.auth.passwords import hash_password, verify_password
 from app.config.settings import GatewaySettings
 from app.repositories.user_repository import UserRepository
+from app.repositories.organization_provisioning_repository import OrganizationProvisioningRepository
 from app.repositories.refresh_session_repository import RefreshSessionRepository
 from app.schemas.auth import LoginRequest, LogoutResponse, RefreshRequest, TokenResponse
 from shared.database.models.refresh_session import RefreshSession
@@ -30,11 +31,13 @@ class AuthenticationService:
         user_repository: UserRepository,
         settings: GatewaySettings,
         refresh_session_repository: RefreshSessionRepository | None = None,
+        organization_provisioning_repository: OrganizationProvisioningRepository | None = None,
     ) -> None:
         self._session = session
         self._user_repository = user_repository
         self._settings = settings
         self._refresh_sessions = refresh_session_repository or RefreshSessionRepository(session)
+        self._organization_provisioner = organization_provisioning_repository or OrganizationProvisioningRepository(session)
 
     async def signup(self, payload: UserCreate) -> UserPublic:
         """Create a user with a canonical email and persisted password hash."""
@@ -46,6 +49,7 @@ class AuthenticationService:
         user = User(email=email, password_hash=hash_password(payload.password))
         try:
             created = await self._user_repository.create(user)
+            await self._organization_provisioner.create_personal_for_user(created)
             await self._session.commit()
         except IntegrityError as error:
             if self._is_duplicate_email_error(error):

@@ -35,7 +35,9 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.MeetingService = _load_service()
 
         from app.repositories.meeting_repository import MeetingRepository
+        from app.repositories.organization_repository import OrganizationRepository
         from app.repositories.transcript_repository import TranscriptRepository
+        from shared.database.models.organization_membership import OrganizationRole
         from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingStatus
         from shared.database.models.transcript import Transcript
         from shared.exceptions.common import ConflictError, ForbiddenError, NotFoundError
@@ -59,6 +61,8 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.session = MagicMock(spec=AsyncSession)
         self.session.commit = AsyncMock()
         self.meeting_repository = MagicMock(spec=MeetingRepository)
+        self.organization_repository = MagicMock(spec=OrganizationRepository)
+        self.organization_repository.get_role = AsyncMock(return_value=OrganizationRole.OWNER)
         self.transcript_repository = MagicMock(spec=TranscriptRepository)
         self.meeting_repository.create = AsyncMock()
         self.meeting_repository.get_by_id = AsyncMock()
@@ -75,6 +79,7 @@ class MeetingServiceTestCase(unittest.TestCase):
             self.session,
             self.meeting_repository,
             self.transcript_repository,
+            self.organization_repository,
         )
         self.user_id = uuid.uuid4()
 
@@ -122,6 +127,40 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.assertEqual(submitted.participants, ["alice@example.com"])
         self.assertEqual(result.id, str(created.id))
         self.session.commit.assert_awaited_once()
+        self.organization_repository.get_role.assert_awaited_once_with(
+            organization_id, self.user_id
+        )
+
+    def test_nonmember_cannot_create_meeting(self) -> None:
+        from shared.exceptions.common import ForbiddenError
+
+        self.organization_repository.get_role.return_value = None
+        organization_id = uuid.uuid4()
+        payload = self.MeetingCreateRequest(
+            organization_id=str(organization_id), title="Planning"
+        )
+        with self.assertRaises(ForbiddenError):
+            asyncio.run(self.service.create_meeting(payload, self.user_id))
+        self.meeting_repository.create.assert_not_awaited()
+        self.session.commit.assert_not_awaited()
+
+    def test_personal_organization_response_is_owner_scoped(self) -> None:
+        organization = type(
+            "OrganizationStub",
+            (),
+            {
+                "id": uuid.uuid4(),
+                "name": "Personal workspace",
+                "created_at": datetime.now(timezone.utc),
+            },
+        )()
+        self.organization_repository.get_personal_for_user.return_value = organization
+        result = asyncio.run(self.service.get_personal_organization(self.user_id))
+        self.assertEqual(result.id, str(organization.id))
+        self.assertEqual(result.role, "owner")
+        self.organization_repository.get_personal_for_user.assert_awaited_once_with(
+            self.user_id
+        )
 
     def test_invalid_meeting_uuid_raises_validation_error_without_commit(self) -> None:
         payload = self.MeetingCreateRequest(

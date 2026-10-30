@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user
 from app.config.settings import get_settings
 from app.repositories.refresh_session_repository import RefreshSessionRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.organization_provisioning_repository import OrganizationProvisioningRepository
 from app.routes.users import get_user_service
 from app.schemas.auth import LoginRequest, LogoutResponse, RefreshRequest, TokenResponse
 from app.services.authentication_service import AuthenticationService
@@ -29,7 +30,11 @@ async def get_authentication_service(
 ) -> AuthenticationService:
     """Build the request-scoped authentication application service."""
     return AuthenticationService(
-        session, UserRepository(session), get_settings(), RefreshSessionRepository(session)
+        session,
+        UserRepository(session),
+        get_settings(),
+        RefreshSessionRepository(session),
+        OrganizationProvisioningRepository(session),
     )
 
 

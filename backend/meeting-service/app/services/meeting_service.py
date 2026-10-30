@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.meeting_repository import MeetingRepository
 from app.repositories.meeting_insight_repository import MeetingInsightRepository
+from app.repositories.organization_repository import OrganizationRepository
+from app.services.organization_authorization import OrganizationAuthorization, OrganizationPermission
 from app.repositories.transcript_repository import TranscriptRepository
 from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingStatus
 from shared.database.models.transcript import Transcript
@@ -18,6 +20,7 @@ from shared.schemas.meeting import MeetingCollectionItem, MeetingCreateRequest, 
 from shared.schemas.meeting import MeetingStatus as SchemaMeetingStatus
 from shared.schemas.pagination import PaginatedResponse, build_paginated_response
 from shared.schemas.meeting_insight import MeetingInsightInDB
+from shared.schemas.organization import PersonalOrganizationResponse
 from shared.schemas.processing_status import MeetingProcessingStatus
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
 from shared.schemas.transcript_indexing import TranscriptIndexSource
@@ -31,19 +34,28 @@ class MeetingService:
         session: AsyncSession,
         meeting_repository: MeetingRepository,
         transcript_repository: TranscriptRepository,
+        organization_repository: OrganizationRepository | None = None,
     ) -> None:
         self._session = session
         self._meeting_repository = meeting_repository
         self._transcript_repository = transcript_repository
         self._insight_repository = MeetingInsightRepository(session)
+        self._organization_repository = organization_repository or OrganizationRepository(session)
+        self._organization_authorization = OrganizationAuthorization(self._organization_repository)
 
     async def create_meeting(
         self,
         payload: MeetingCreateRequest,
         authenticated_user_id: UUID,
     ) -> MeetingPublic:
+        organization_id = self._parse_uuid(payload.organization_id, "organization ID")
+        await self._organization_authorization.require(
+            authenticated_user_id,
+            organization_id,
+            OrganizationPermission.SUBMIT_MEETING,
+        )
         meeting = Meeting(
-            organization_id=self._parse_uuid(payload.organization_id, "organization ID"),
+            organization_id=organization_id,
             created_by=authenticated_user_id,
             title=payload.title,
             description=payload.description,
@@ -54,6 +66,21 @@ class MeetingService:
         created = await self._meeting_repository.create(meeting)
         await self._session.commit()
         return self._meeting_to_public(created)
+
+    async def get_personal_organization(
+        self, authenticated_user_id: UUID
+    ) -> PersonalOrganizationResponse:
+        organization = await self._organization_repository.get_personal_for_user(
+            authenticated_user_id
+        )
+        if organization is None:
+            raise NotFoundError("Personal organization not found.")
+        return PersonalOrganizationResponse(
+            id=str(organization.id),
+            name=organization.name,
+            role="owner",
+            created_at=organization.created_at,
+        )
 
     async def get_meeting(
         self,

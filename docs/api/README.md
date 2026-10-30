@@ -84,15 +84,16 @@ All routes below are gateway-owned under `/api/v1`:
 
 Gateway auth, user self-service, and meeting/result facade endpoints are active.
 Meeting Service also exposes internal, unversioned meeting routes. Its
-organization-wide list route currently lacks principal and organization
-membership checks; it is internal-only and not a public authorization
-boundary. Organization membership is not implemented. Phase 5 does not expose
-that route through the Gateway: `organization_id` and `created_by` are UUID
-columns without organization or user foreign keys, and there is no Organization
-or membership model. A public organization list requires a persisted,
-authenticated user's organization-membership relationship and an authorization
-policy enforced downstream; accepting a caller-supplied organization ID alone
-would not be safe. Until that prerequisite exists, the list remains internal.
+organization-wide list route remains internal-only and is not exposed through
+the Gateway. The repository now has organizations and memberships, and
+`GET /api/v1/organizations/personal` returns the authenticated user's personal
+organization. Signup provisions that organization with an owner membership.
+`POST /api/v1/meetings` checks membership inside Meeting Service; owner, admin,
+and member roles may create meetings. A caller-supplied organization ID alone
+is not authorization. Existing meeting organization UUIDs were not mapped to
+memberships, so existing meeting access remains creator-scoped. Organization
+creation beyond signup, invitations, membership administration, deletion,
+ownership transfer, and organization-wide listing are not implemented.
 
 The Phase 5 Meeting contract does not define supported search fields or sort
 parameters. The existing internal organization list retains its deterministic

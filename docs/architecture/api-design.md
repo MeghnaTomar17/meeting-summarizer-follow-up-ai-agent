@@ -275,8 +275,9 @@ Router in `app/routes/search.py`.
 Meeting Service mounts meeting, transcript, summary, task, decision, and
 follow-up routes. Result routes are nested under `/meetings/{meeting_id}` and
 perform ownership checks in services. The organization-wide Meeting list
-remains internal-only: there is no Organization/membership model or
-authorization policy, and a client-supplied organization ID is not sufficient
-authorization. Phase 5 does not define Meeting search fields or client-selected
+remains internal-only and still has no membership check. Organization and
+membership models now exist, and Meeting creation checks membership inside
+Meeting Service; a client-supplied organization ID alone is not authority.
+Phase 5 does not define Meeting search fields or client-selected
 sort keys; the internal list retains deterministic `created_at DESC, id DESC`
 ordering. Task and FollowUp lists support the existing `status` equality filter.

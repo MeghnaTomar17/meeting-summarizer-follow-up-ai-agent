@@ -183,8 +183,10 @@ initial applied domain schema. It creates:
 The ORM uses `values_callable` so SQLAlchemy persists enum values (`pending`)
 instead of Python member names (`PENDING`). `Meeting.transcript` is a one-to-one
 relationship (`uselist=False`) and uses `delete-orphan` for aggregate ownership.
-`organization_id` and `created_by` are UUID fields, **not foreign keys**: no
-organization/user ORM tables exist yet.
+`organization_id` and `created_by` remain UUID fields, **not foreign keys**.
+Organizations and memberships are modeled separately; the migration does not
+attach historical meeting organization IDs to organizations because their
+ownership cannot be inferred safely.
 
 ## Implemented data-access and use-case boundaries
 
@@ -206,7 +208,8 @@ Meeting Service exposes internal unversioned meeting and transcript routes.
 Gateway exposes authenticated public meeting and transcript routes under
 `/api/v1/meetings` and forwards them using `MeetingServiceClient`. The internal
 organization-wide list route remains without identity or membership
-authorization; organization membership is pending.
+authorization. Meeting creation separately requires a membership in the
+requested organization.
 
 ```
 HTTP request
@@ -338,11 +341,11 @@ PostgreSQL source. The repository is covered by fake-client tests; live Qdrant
 operation remains unverified unless the opt-in integration test is run.
 
 Phase 10.5 queries only with a mandatory `owner_id` filter derived from a
-Gateway-signed Search-audience principal. It does not use `organization_id`
-for authorization because organization membership is not modeled.
+Gateway-signed Search-audience principal. It continues to use owner scope and
+does not use `organization_id` for authorization.
 
 Index metadata carries `owner_id` from persisted `Meeting.created_by` and
 `organization_id`. Future retrieval must derive allowed meeting/owner scope
 from the authenticated principal and server-side authorization. Current
-meeting access is creator-based; organization membership is not modeled, so
-organization filtering alone cannot authorize access.
+meeting access is creator-based; organization filtering alone cannot authorize
+access. Meeting creation checks membership inside Meeting Service.

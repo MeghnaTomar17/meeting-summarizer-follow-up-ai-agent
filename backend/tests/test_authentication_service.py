@@ -63,11 +63,16 @@ class AuthenticationServiceTestCase(unittest.TestCase):
 
         from app.schemas.auth import LoginRequest
         from shared.database.models.user import User
+        from shared.database.models.organization import Organization
+        from shared.database.models.organization_membership import OrganizationMembership, OrganizationRole
         from shared.exceptions.common import ConflictError, UnauthorizedError
         from shared.schemas.user import UserCreate
 
         self.LoginRequest = LoginRequest
         self.User = User
+        self.Organization = Organization
+        self.OrganizationMembership = OrganizationMembership
+        self.OrganizationRole = OrganizationRole
         self.UserCreate = UserCreate
         self.ConflictError = ConflictError
         self.UnauthorizedError = UnauthorizedError
@@ -98,6 +103,16 @@ class AuthenticationServiceTestCase(unittest.TestCase):
         self.assertEqual(persisted.password_hash, "new-hash")
         self.assertNotIn("password", persisted.__table__.c)
         self.session.commit.assert_awaited_once()
+        added = [call.args[0] for call in self.session.add.call_args_list]
+        organizations = [row for row in added if isinstance(row, self.Organization)]
+        memberships = [row for row in added if isinstance(row, self.OrganizationMembership)]
+        self.assertEqual(len(organizations), 1)
+        self.assertEqual(organizations[0].name, "Personal workspace")
+        self.assertEqual(organizations[0].personal_owner_user_id, created.id)
+        self.assertEqual(len(memberships), 1)
+        self.assertEqual(memberships[0].organization_id, organizations[0].id)
+        self.assertEqual(memberships[0].user_id, created.id)
+        self.assertEqual(memberships[0].role, self.OrganizationRole.OWNER)
         self.session.rollback.assert_not_called()
         self.assertEqual(result.email, "user@example.com")
         self.assertNotIn("password_hash", result.model_dump())
@@ -113,6 +128,18 @@ class AuthenticationServiceTestCase(unittest.TestCase):
         hash_password.assert_not_called()
         self.repository.create.assert_not_called()
         self.session.commit.assert_not_called()
+        self.session.add.assert_not_called()
+
+    def test_personal_organization_failure_prevents_signup_commit(self) -> None:
+        self.repository.get_by_email.return_value = None
+        self.repository.create.return_value = self._user()
+        self.service._organization_provisioner.create_personal_for_user = AsyncMock(
+            side_effect=RuntimeError("provisioning failed")
+        )
+        payload = self.UserCreate(email="user@example.com", password="password1")
+        with self.assertRaisesRegex(RuntimeError, "provisioning failed"):
+            asyncio.run(self.service.signup(payload))
+        self.session.commit.assert_not_awaited()
 
     def test_unique_constraint_race_raises_conflict_without_commit(self) -> None:
         self.repository.get_by_email.return_value = None

@@ -35,8 +35,8 @@ pipeline that returns complete typed batches or controlled empty results.
 Phase 10.4 adds explicit collection initialization/validation and Search-owned
 Qdrant point persistence and deletion. Phase 10.5 adds an authenticated Gateway
 proxy and Search retrieval path that uses Gateway-signed RS256 internal
-principals and mandatory owner filtering. Organization membership is not
-modeled, so retrieval scope is limited to the authenticated meeting owner.
+principals and mandatory owner filtering. Organization membership supports
+meeting creation; retrieval scope remains the authenticated meeting owner.
 Phase 10.6 hardens proxy behavior for timeouts and all non-success HTTP status
 codes, and adds Gateway authentication/forwarding/sanitization coverage. The
 opt-in live Qdrant repository test verifies deterministic similarity search and
@@ -448,7 +448,7 @@ payloads cannot set `created_by` and do not determine authenticated ownership.
 
 The internal `GET /meetings?organization_id=...` list route intentionally
 remains without internal-principal or organization-membership authorization.
-There is no organization membership model yet; this route is internal-only and
+The route is internal-only and
 not an authorization boundary for clients. The public Gateway facade currently
 does not expose that list operation.
 
@@ -567,11 +567,10 @@ support `?status=`.
 | Decision | `POST`, paginated `GET`, `GET /{decision_id}` |
 | FollowUp | `POST`, paginated/status-filtered `GET`, `GET /{followup_id}`, `PATCH /{followup_id}` |
 
-The public organization-wide Meeting list remains deferred. There is no
-persisted Organization or membership model; `organization_id` and `created_by`
-are UUIDs without foreign keys and do not establish membership authorization.
-A safe public list requires persisted user-to-organization membership and a
-downstream authorization policy. Phase 5 also defines no searchable or
+The public organization-wide Meeting list remains deferred. Organizations and
+memberships are persisted, but historical `organization_id` and `created_by`
+values remain UUIDs without foreign keys and do not establish membership.
+Meeting creation checks membership downstream. Phase 5 also defines no searchable or
 client-sortable Meeting fields. The internal list remains deterministic by
 `created_at DESC, id DESC`; no search infrastructure or client-selected sort
 was added.
@@ -1102,8 +1101,8 @@ positions, text, speakers, optional timestamps, language, owner ID, and
 organization ID. `owner_id` maps to `Meeting.created_by`. Future indexing must
 derive scope from server-resolved meeting metadata, and retrieval must filter
 by authenticated/authorized scope; a client-provided ID is not authority.
-Organization membership is not currently modeled, so `organization_id` alone
-must not be treated as an authorization decision.
+Organization membership is modeled, but `organization_id` alone must not be
+treated as an authorization decision. Search continues to authorize by owner.
 
 `EmbeddingModelIdentity`, `EmbeddingRequest`, `EmbeddingResponse`, and the
 `EmbeddingProvider` protocol are provider-neutral. Configuration represents

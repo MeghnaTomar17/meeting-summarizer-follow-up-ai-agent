@@ -15,6 +15,7 @@ from app.routes.search import router as search_router
 from app.routes.cross_meeting import router as cross_meeting_router
 from app.routes.users import router as users_router
 from app.routes.analytics import router as analytics_router
+from app.routes.organizations import router as organizations_router
 from shared.api.constants import API_V1_PREFIX
 
 api_v1_router = APIRouter(prefix=API_V1_PREFIX)
@@ -25,6 +26,7 @@ api_v1_router.include_router(search_router)
 api_v1_router.include_router(cross_meeting_router)
 api_v1_router.include_router(users_router)
 api_v1_router.include_router(analytics_router)
+api_v1_router.include_router(organizations_router)
 
 # Future business routers mount here, for example:
 # api_v1_router.include_router(search.router)

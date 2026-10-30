@@ -48,6 +48,7 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
         self.meeting_client.create_meeting = AsyncMock()
         self.meeting_client.get_meeting = AsyncMock()
         self.meeting_client.list_owned_meetings = AsyncMock()
+        self.meeting_client.get_personal_organization = AsyncMock()
         self.app.dependency_overrides[client_dependency] = lambda: self.meeting_client
         self.app.dependency_overrides[self.auth_dependency] = lambda: self.user
         self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -106,6 +107,34 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
         self.meeting_client.get_meeting.assert_not_called()
         self.assertEqual(self.client.get("/api/v1/meetings").status_code, 401)
         self.meeting_client.list_owned_meetings.assert_not_awaited()
+
+    def test_personal_organization_route_forwards_authenticated_user(self) -> None:
+        from shared.schemas.organization import PersonalOrganizationResponse
+
+        organization = PersonalOrganizationResponse(
+            id=str(uuid.uuid4()),
+            name="Personal workspace",
+            role="owner",
+            created_at=datetime.now(timezone.utc),
+        )
+        self.meeting_client.get_personal_organization.return_value = organization
+        response = self.client.get(
+            "/api/v1/organizations/personal",
+            headers={"X-Request-ID": "personal-org-read"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.meeting_client.get_personal_organization.assert_awaited_once_with(
+            user_id=self.user.id, request_id="personal-org-read"
+        )
+
+    def test_personal_organization_requires_gateway_authentication(self) -> None:
+        from shared.database.session import get_db_session
+
+        self.app.dependency_overrides.pop(self.auth_dependency)
+        self.app.dependency_overrides[get_db_session] = lambda: MagicMock()
+        response = self.client.get("/api/v1/organizations/personal")
+        self.assertEqual(response.status_code, 401)
+        self.meeting_client.get_personal_organization.assert_not_awaited()
 
     def test_gateway_meeting_collection_forwards_owner_pagination_and_request_id(self) -> None:
         from shared.schemas.meeting import MeetingCollectionItem
@@ -240,6 +269,59 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
                 principal, public_key=public_key,
                 algorithm=settings.internal_principal_algorithm,
                 issuer=settings.internal_principal_issuer, audience="meeting-service",
+            ),
+            self.user.id,
+        )
+
+    def test_personal_organization_client_uses_signed_meeting_audience_and_request_id(self) -> None:
+        from app.config.settings import GatewaySettings
+        from shared.security.internal_principal import verify_internal_principal
+
+        settings = GatewaySettings(_env_file=None)
+        private_key = serialization.load_pem_private_key(
+            settings.internal_principal_private_key.get_secret_value().encode(),
+            password=None,
+        )
+        public_key = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+        client_module = importlib.import_module("app.services.meeting_client")
+        response = client_module.httpx.Response(
+            200,
+            json={
+                "id": str(uuid.uuid4()),
+                "name": "Personal workspace",
+                "role": "owner",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        transport = MagicMock()
+        transport.request = AsyncMock(return_value=response)
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=transport)
+        context.__aexit__ = AsyncMock(return_value=False)
+        service_client = client_module.MeetingServiceClient(settings)
+
+        async def invoke():
+            with patch.object(client_module.httpx, "AsyncClient", return_value=context):
+                return await service_client.get_personal_organization(
+                    user_id=self.user.id, request_id="personal-org-signed"
+                )
+
+        result = asyncio.run(invoke())
+        self.assertEqual(result.role, "owner")
+        args, kwargs = transport.request.await_args
+        self.assertEqual(args, ("GET", "/organizations/personal"))
+        self.assertEqual(kwargs["headers"]["X-Request-ID"], "personal-org-signed")
+        token = kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        self.assertEqual(
+            verify_internal_principal(
+                token,
+                public_key=public_key,
+                algorithm=settings.internal_principal_algorithm,
+                issuer=settings.internal_principal_issuer,
+                audience="meeting-service",
             ),
             self.user.id,
         )

@@ -10,6 +10,8 @@ from shared.database.models.decision import Decision
 from shared.database.models.followup import Followup, FollowupStatus
 from shared.database.models.meeting import Meeting, MeetingStatus
 from shared.database.models.meeting_insight import MeetingInsight
+from shared.database.models.organization import Organization
+from shared.database.models.organization_membership import OrganizationMembership, OrganizationRole
 from shared.database.models.processing_job import ProcessingJobRecord
 from shared.database.models.refresh_session import RefreshSession
 from shared.database.models.summary import Summary
@@ -24,6 +26,9 @@ __all__ = [
     "FollowupStatus",
     "Meeting",
     "MeetingInsight",
+    "Organization",
+    "OrganizationMembership",
+    "OrganizationRole",
     "MeetingStatus",
     "ProcessingJobRecord",
     "RefreshSession",

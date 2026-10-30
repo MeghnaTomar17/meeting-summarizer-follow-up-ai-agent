@@ -30,6 +30,7 @@ from shared.schemas.followup import FollowupBase, FollowupInDB, FollowupUpdate
 from shared.schemas.pagination import PaginatedResponse
 from shared.schemas.cross_meeting import CrossMeetingDataQuery, CrossMeetingStructuredData
 from shared.schemas.meeting_insight import MeetingInsightInDB
+from shared.schemas.organization import PersonalOrganizationResponse
 from shared.schemas.processing_status import MeetingProcessingStatus
 from shared.schemas.analytics import (
     AnalyticsOverviewResponse,
@@ -60,6 +61,14 @@ class MeetingServiceClient:
             "POST", "/meetings", payload.model_dump(mode="json"), user_id, request_id
         )
         return MeetingPublic.model_validate(response)
+
+    async def get_personal_organization(
+        self, *, user_id: UUID, request_id: str | None
+    ) -> PersonalOrganizationResponse:
+        response = await self._request(
+            "GET", "/organizations/personal", None, user_id, request_id
+        )
+        return PersonalOrganizationResponse.model_validate(response)
 
     async def list_owned_meetings(
         self,

@@ -94,6 +94,30 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.assertIn("/meetings/{meeting_id}/status", paths)
         self.assertIn("/meetings/{meeting_id}/insights", paths)
         self.assertIn("/meetings/{meeting_id}/processing-status", paths)
+        self.assertIn("/organizations/personal", paths)
+
+    def test_personal_organization_route_uses_verified_internal_user(self) -> None:
+        from app.auth.dependencies import get_authenticated_user_id
+        from app.routes.organizations import get_organization_service
+        from shared.schemas.organization import PersonalOrganizationResponse
+
+        self.service.get_personal_organization = AsyncMock(
+            return_value=PersonalOrganizationResponse(
+                id=str(uuid.uuid4()),
+                name="Personal workspace",
+                role="owner",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        self.app.dependency_overrides[get_organization_service] = lambda: self.service
+        response = self.client.get("/organizations/personal")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.service.get_personal_organization.assert_awaited_once_with(
+            self.authenticated_user_id
+        )
+        self.app.dependency_overrides.pop(get_authenticated_user_id)
+        response = self.client.get("/organizations/personal")
+        self.assertEqual(response.status_code, 401)
 
     def test_details_resources_require_owned_meeting_before_repository_read(self) -> None:
         from shared.exceptions.common import ForbiddenError

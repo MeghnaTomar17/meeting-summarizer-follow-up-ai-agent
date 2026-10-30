@@ -777,9 +777,9 @@ re-indexing must remove stale positions if chunk layout changes.
 Payload `owner_id` maps to the persisted `Meeting.created_by`; `organization_id`
 is also retained as tenant metadata. Future search scope must come from the
 authenticated identity plus server-side MeetingService authorization, not
-client-provided IDs. Current authorization is creator-based; organization
-membership is not modeled, so organization ID alone is not sufficient
-authorization.
+client-provided IDs. Meeting creation now checks persisted membership;
+organization ID alone is not sufficient authorization, and search remains
+owner-scoped.
 
 Transcript creation/replacement and content changes require re-indexing from
 the PostgreSQL source. Meeting deletion requires cross-store point cleanup.

@@ -117,6 +117,28 @@ class RefreshSessionPostgresIntegrationTestCase(unittest.IsolatedAsyncioTestCase
             )
             return result.scalar_one_or_none()
 
+    async def test_signup_commits_personal_organization_and_owner_membership(self) -> None:
+        from shared.database.models.organization import Organization
+        from shared.database.models.organization_membership import OrganizationMembership
+
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(Organization, OrganizationMembership.role)
+                .join(
+                    OrganizationMembership,
+                    OrganizationMembership.organization_id == Organization.id,
+                )
+                .where(
+                    Organization.personal_owner_user_id == self.user_id,
+                    OrganizationMembership.user_id == self.user_id,
+                )
+            )
+            rows = result.all()
+        self.assertEqual(len(rows), 1)
+        organization, role = rows[0]
+        self.assertEqual(organization.name, "Personal workspace")
+        self.assertEqual(role.value, "owner")
+
     async def test_login_persists_only_hash_for_correct_user_and_expiration(self) -> None:
         from app.schemas.auth import LoginRequest
 

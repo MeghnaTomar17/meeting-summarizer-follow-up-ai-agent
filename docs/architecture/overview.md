@@ -310,8 +310,9 @@ Payload ownership metadata maps `owner_id` to the persisted
 `Meeting.created_by` and also carries `organization_id`. Future retrieval
 must derive allowed scope from authenticated identity and server-side
 MeetingService authorization; client-supplied IDs cannot establish authority.
-Current Meeting authorization is creator-based, and organization membership
-is not modeled, so organization filtering alone is not an authorization rule.
+Meeting reads remain creator-scoped; meeting creation additionally checks a
+persisted organization membership. Organization filtering alone is not an
+authorization rule.
 No search endpoint or RAG prompt path is part of 10.1.
 
 When transcripts are replaced or edited, the authoritative PostgreSQL
@@ -344,8 +345,8 @@ query always includes the mandatory owner filter before vector search. Results
 are validated against the persisted chunk payload and point ID; owner and
 organization metadata, raw payloads, and vectors are not returned.
 
-Current Meeting authorization is creator-based and organization membership is
-not modeled, so retrieval is owner-only. Search requires its own configured
+Meeting reads remain creator-scoped and creation checks membership; retrieval
+is still owner-only. Search requires its own configured
 verification public key in production; Gateway retains the signing private
 key. Docker/Compose wiring was not changed in this block, so production
 deployment must supply the matching Search public key through its runtime
