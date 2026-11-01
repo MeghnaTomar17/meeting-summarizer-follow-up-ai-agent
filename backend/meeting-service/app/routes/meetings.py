@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_authenticated_user_id
@@ -24,6 +24,7 @@ from shared.schemas.meeting import (
     MeetingUpdate,
 )
 from shared.schemas.pagination import PaginatedResponse, PaginationParams
+from shared.schemas.meeting_submission import MeetingSubmissionReceipt, MeetingSubmissionRequest
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -47,6 +48,17 @@ async def create_meeting(
 ) -> MeetingPublic:
     """Create a meeting through the meeting application service."""
     return await service.create_meeting(payload, authenticated_user_id)
+
+
+@router.post("/submit", response_model=MeetingSubmissionReceipt, status_code=status.HTTP_201_CREATED)
+async def submit_meeting(
+    payload: MeetingSubmissionRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
+    service: MeetingService = Depends(get_meeting_service),
+) -> MeetingSubmissionReceipt:
+    """Persist a meeting, transcript revision, job and outbox atomically."""
+    return await service.submit_meeting(payload, authenticated_user_id, idempotency_key)
 
 
 @router.get("/owned", response_model=PaginatedResponse[MeetingCollectionItem])

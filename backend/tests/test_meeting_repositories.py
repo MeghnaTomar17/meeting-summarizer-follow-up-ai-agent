@@ -39,6 +39,7 @@ class RepositoryTestCase(unittest.TestCase):
         self.session = MagicMock(spec=AsyncSession)
         self.session.flush = AsyncMock()
         self.session.execute = AsyncMock()
+        self.session.scalar = AsyncMock()
 
         from shared.database.models.meeting import Meeting, MeetingStatus
         from shared.database.models.transcript import Transcript
@@ -60,6 +61,7 @@ class RepositoryTestCase(unittest.TestCase):
         return self.Transcript(
             id=uuid.uuid4(),
             meeting_id=uuid.uuid4(),
+            revision_number=1,
             segments=[],
         )
 
@@ -214,22 +216,36 @@ class RepositoryTestCase(unittest.TestCase):
         self.session.commit.assert_not_called()
         self.session.rollback.assert_not_called()
 
-    def test_transcript_replace_segments_and_language_without_commit(self) -> None:
-        transcript = self._transcript()
+    def test_transcript_revision_is_appended_without_mutating_previous_row(self) -> None:
+        meeting = self._meeting()
+        previous = self._transcript()
+        previous.meeting_id = meeting.id
+        original_segments = list(previous.segments)
         repository = self.TranscriptRepository(self.session)
         segments = [{"index": 0, "text": "Decide next steps."}]
+        lock_result = MagicMock()
+        lock_result.scalar_one_or_none.return_value = meeting.id
+        self.session.execute.return_value = lock_result
+        self.session.scalar.return_value = 1
 
         result = asyncio.run(
-            repository.replace_for_meeting(
-                transcript,
+            repository.create_revision(
+                meeting.id,
                 segments=segments,
                 language="en",
             )
         )
 
-        self.assertIs(result, transcript)
-        self.assertEqual(transcript.segments, segments)
-        self.assertEqual(transcript.language, "en")
+        self.assertEqual(result.meeting_id, meeting.id)
+        self.assertEqual(result.revision_number, 2)
+        self.assertEqual(result.segments, segments)
+        self.assertEqual(result.language, "en")
+        self.assertEqual(previous.segments, original_segments)
+        self.assertIsNot(result, previous)
+        self.assertEqual(self.session.execute.await_count, 1)
+        self.assertIn("FOR UPDATE", str(self.session.execute.await_args.args[0]))
+        self.session.scalar.assert_awaited_once()
+        self.session.add.assert_called_once_with(result)
         self.session.flush.assert_awaited_once()
         self.session.commit.assert_not_called()
         self.session.rollback.assert_not_called()

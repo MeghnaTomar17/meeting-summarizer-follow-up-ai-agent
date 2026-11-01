@@ -21,6 +21,7 @@ from shared.schemas.meeting import (
     MeetingStatus,
     MeetingUpdate,
 )
+from shared.schemas.meeting_submission import MeetingSubmissionReceipt, MeetingSubmissionRequest
 from shared.schemas.transcript import TranscriptInDB, TranscriptWrite
 from shared.schemas.transcript_indexing import TranscriptIndexSource
 from shared.schemas.summary import SummaryBase, SummaryInDB
@@ -61,6 +62,24 @@ class MeetingServiceClient:
             "POST", "/meetings", payload.model_dump(mode="json"), user_id, request_id
         )
         return MeetingPublic.model_validate(response)
+
+    async def submit_meeting(
+        self,
+        payload: MeetingSubmissionRequest,
+        *,
+        idempotency_key: str,
+        user_id: UUID,
+        request_id: str | None,
+    ) -> MeetingSubmissionReceipt:
+        response = await self._request(
+            "POST",
+            "/meetings/submit",
+            payload.model_dump(mode="json"),
+            user_id,
+            request_id,
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+        return MeetingSubmissionReceipt.model_validate(response)
 
     async def get_personal_organization(
         self, *, user_id: UUID, request_id: str | None
@@ -339,6 +358,8 @@ class MeetingServiceClient:
         payload: dict[str, object] | None,
         user_id: UUID,
         request_id: str | None,
+        *,
+        extra_headers: dict[str, str] | None = None,
     ) -> object:
         principal = create_internal_principal(
             user_id,
@@ -351,6 +372,8 @@ class MeetingServiceClient:
         headers = {"Authorization": f"Bearer {principal}"}
         if request_id:
             headers["X-Request-ID"] = request_id
+        if extra_headers:
+            headers.update(extra_headers)
         try:
             async with httpx.AsyncClient(base_url=self._base_url, timeout=10.0) as client:
                 response = await client.request(method, path, json=payload, headers=headers)

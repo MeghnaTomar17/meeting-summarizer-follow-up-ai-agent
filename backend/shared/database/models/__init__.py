@@ -10,6 +10,8 @@ from shared.database.models.decision import Decision
 from shared.database.models.followup import Followup, FollowupStatus
 from shared.database.models.meeting import Meeting, MeetingStatus
 from shared.database.models.meeting_insight import MeetingInsight
+from shared.database.models.meeting_submission_idempotency import MeetingSubmissionIdempotency
+from shared.database.models.job_outbox_event import JobOutboxEvent
 from shared.database.models.organization import Organization
 from shared.database.models.organization_membership import OrganizationMembership, OrganizationRole
 from shared.database.models.processing_job import ProcessingJobRecord
@@ -26,6 +28,8 @@ __all__ = [
     "FollowupStatus",
     "Meeting",
     "MeetingInsight",
+    "MeetingSubmissionIdempotency",
+    "JobOutboxEvent",
     "Organization",
     "OrganizationMembership",
     "OrganizationRole",

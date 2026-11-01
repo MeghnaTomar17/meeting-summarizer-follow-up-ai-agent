@@ -70,7 +70,7 @@ All routes below are gateway-owned under `/api/v1`:
 |--------|----------------|-------|
 | `/auth` | gateway-service | Login, register, refresh |
 | `/users` | gateway-service | Profiles and administration |
-| `/meetings` | gateway → meeting-service | Authenticated meeting/transcript facade plus Phase 5 summary, task, decision, and follow-up APIs |
+| `/meetings` | gateway → meeting-service | Authenticated meeting/transcript facade, atomic `POST /meetings/submit`, and meeting result APIs |
 | `/search` | gateway → search-service | Semantic search facade |
 | `/intelligence/structured-data` | gateway → meeting-service | Owner-scoped, bounded structured evidence across meetings |
 | `/intelligence/evidence` | gateway → meeting-service + search-service | Structured and semantic evidence retrieval; no answer generation |
@@ -94,6 +94,26 @@ is not authorization. Existing meeting organization UUIDs were not mapped to
 memberships, so existing meeting access remains creator-scoped. Organization
 creation beyond signup, invitations, membership administration, deletion,
 ownership transfer, and organization-wide listing are not implemented.
+
+`POST /api/v1/meetings/submit` accepts an `Idempotency-Key` header and a JSON
+body containing `meeting`, `transcript`, and `requested_operations`. The
+Gateway derives the caller from its authenticated access token and forwards a
+short-lived signed Meeting Service principal; owner identity is never accepted
+in the body. Meeting Service checks membership and commits the meeting,
+immutable transcript revision, queued `processing_jobs` record,
+owner-scoped idempotency receipt, and pending `job_outbox_events` row in one
+transaction. The response contains only meeting/transcript IDs and the initial
+queued status. Repeating an owner/key with the same canonical payload returns
+the same receipt; a changed payload returns 409. Keys are 1–255 characters.
+Transcript text over 100,000 characters is rejected, never truncated. The
+outbox row becomes visible only after commit; a separate one-event relay can
+publish a claimed row, but no polling or scheduled relay is wired to this API,
+so submission itself does not claim broker delivery.
+
+Transcript `PUT /api/v1/meetings/{meeting_id}/transcript` appends an immutable
+transcript revision while retaining the existing `TranscriptInDB` response
+shape. Background jobs resolve the exact transcript UUID captured at submission,
+even when a later revision is created.
 
 The Phase 5 Meeting contract does not define supported search fields or sort
 parameters. The existing internal organization list retains its deterministic
@@ -329,8 +349,10 @@ reasoning; Search Service continues to own embeddings and vector retrieval.
 and the existing structured time-window and task filters. Gateway retrieves
 the Block 2 evidence bundle using the authenticated user and request ID, then
 forwards that validated bundle to AI Service with an `ai-service` audience-bound
-principal. AI Service uses the configured provider adapter and the established
-structured-output validator. The response contains an answer, an
+principal. AI Service uses the registered local Ollama adapter and the
+structured-output validator. The fail-closed token-budget gate currently blocks
+generation because exact rendered-request counting and effective Ollama context
+are not verified. The response contains an answer, an
 `insufficient_evidence` flag, and citations with source type, stable record ID,
 meeting ID, and available timestamp or transcript offsets. Citation metadata
 is reconstructed from trusted retrieval results; unknown evidence IDs are
@@ -349,6 +371,24 @@ by Search Service to meeting IDs returned by the month-bounded meeting query.
 Overdue and unresolved task questions select the existing `overdue` and
 `unresolved` structured filters. Answers about repeated deadline problems
 require cited overdue task records from at least two distinct meetings.
+
+### Internal outbox publication (Meeting Service → AI Service)
+
+`POST /internal/jobs/outbox-events` is an AI Service internal endpoint, not a
+Gateway public route. It accepts `event_id`, `owner_id`, `job_id`, the existing
+`ai.processing.requested.v1` event type, and the strict existing AI job envelope
+as `payload`. The outer `job_id` must match `payload.job_id`. A successful
+publication returns `202` with the stable `event_id` and `job_id`; AI Service
+signs the worker authorization and publishes the existing Celery task. Duplicate
+requests are allowed and retain those same identities for at-least-once delivery.
+
+Authentication is a short-lived RS256 service principal issued by Meeting
+Service (`iss` and `sub` `meeting-service`) for audience
+`ai-service:outbox-publication`. It is separate from Gateway user principals
+and AI-to-worker job authorization. Meeting Service holds only the dedicated
+service-auth private key; AI Service verifies with its matching public key and
+alone holds the background-job signing private key. Deployment key provisioning
+and rotation requirements are recorded in the architecture overview.
 
 ### Meeting result routes
 

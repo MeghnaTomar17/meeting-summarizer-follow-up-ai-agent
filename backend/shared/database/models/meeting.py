@@ -77,10 +77,9 @@ class Meeting(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=MeetingStatus.PENDING.value,
     )
 
-    transcript: Mapped["Transcript | None"] = relationship(
+    transcripts: Mapped[list["Transcript"]] = relationship(
         "Transcript",
         back_populates="meeting",
-        uselist=False,
         cascade="all, delete-orphan",
     )
     summaries: Mapped[list["Summary"]] = relationship(

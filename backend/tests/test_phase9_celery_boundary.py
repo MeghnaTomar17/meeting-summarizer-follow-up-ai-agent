@@ -257,10 +257,13 @@ class Phase9CeleryBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
     def test_submission_settings_factory_requires_configured_private_key(self):
         sender = MagicMock()
-        with self.assertRaises(self.submission_module.CelerySubmissionError):
+        from shared.jobs.outbox_policy import OutboxFailureCategory, OutboxPublicationError
+
+        with self.assertRaises(OutboxPublicationError) as raised:
             self.submission_module.CeleryJobSubmissionPort.from_settings(
                 sender, SimpleNamespace(background_job_signing_private_key=None)
             )
+        self.assertEqual(raised.exception.category, OutboxFailureCategory.CONFIGURATION_INVALID)
         configured = self.submission_module.CeleryJobSubmissionPort.from_settings(
             sender,
             SimpleNamespace(

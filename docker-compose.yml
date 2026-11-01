@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-mannerai_meetings}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -113,6 +113,7 @@ services:
       <<: *docker-service-env
       APP_ENV: ${APP_ENV:-development}
       INTERNAL_PRINCIPAL_PUBLIC_KEY:
+      OUTBOX_PUBLICATION_AUTH_PRIVATE_KEY:
     expose:
       - "8001"
     depends_on:
@@ -136,10 +137,14 @@ services:
     environment:
       <<: *docker-service-env
       APP_ENV: ${APP_ENV:-development}
-      OPENAI_API_KEY:
-      OPENAI_MODEL:
+      AI_MODEL_PROVIDER: ${AI_MODEL_PROVIDER:-ollama}
+      AI_MODEL: ${AI_MODEL:-llama3.2:3b}
+      OLLAMA_BASE_URL: ${OLLAMA_DOCKER_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-30}
       GEMINI_API_KEY:
       GEMINI_MODEL:
+      BACKGROUND_JOB_SIGNING_PRIVATE_KEY:
+      OUTBOX_PUBLICATION_AUTH_PUBLIC_KEY:
     ports:
       - "${AI_SERVICE_PORT:-8002}:8002"
     depends_on:
@@ -188,6 +193,10 @@ services:
     environment:
       <<: *docker-service-env
       APP_ENV: ${APP_ENV:-development}
+      AI_MODEL_PROVIDER: ${AI_MODEL_PROVIDER:-ollama}
+      AI_MODEL: ${AI_MODEL:-llama3.2:3b}
+      OLLAMA_BASE_URL: ${OLLAMA_DOCKER_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-30}
     ports:
       - "${WORKER_SERVICE_PORT:-8004}:8004"
     depends_on:

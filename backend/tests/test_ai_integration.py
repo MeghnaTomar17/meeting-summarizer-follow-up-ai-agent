@@ -183,7 +183,7 @@ class AIApplicationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         meeting_repository = MagicMock()
         meeting_repository.get_by_id = AsyncMock(return_value=meeting)
         transcript_repository = MagicMock()
-        transcript_repository.get_by_meeting_id = AsyncMock(return_value=transcript)
+        transcript_repository.get_revision = AsyncMock(return_value=transcript)
         session = MagicMock()
         service = meeting_service_module.MeetingService(
             session, meeting_repository, transcript_repository
@@ -237,7 +237,7 @@ class AIApplicationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(normalized["segments"][0]["speaker"], "Ravi")
         self.assertEqual(normalized["segments"][0]["start_ms"], 0)
         meetings.get_by_id.assert_awaited_once_with(MEETING_ID)
-        transcripts.get_by_meeting_id.assert_awaited_once_with(MEETING_ID)
+        transcripts.get_revision.assert_awaited_once_with(MEETING_ID, TRANSCRIPT_ID)
         session.commit.assert_not_called()
         self.assertEqual(submission.pending_count, 0)
         with self.assertRaises(self.jobs.NoQueuedJobError):
@@ -296,7 +296,7 @@ class AIApplicationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.EXECUTION_FAILED)
         self.assertNotIn("owner", finished.failure.message.lower())
         meetings.get_by_id.assert_awaited_once_with(MEETING_ID)
-        transcripts.get_by_meeting_id.assert_not_awaited()
+        transcripts.get_revision.assert_not_awaited()
         self.assertEqual(provider.requests, [])
         session.commit.assert_not_called()
 

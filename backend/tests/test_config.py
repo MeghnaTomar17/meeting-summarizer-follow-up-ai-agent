@@ -133,10 +133,17 @@ class ConfigTestCase(unittest.TestCase):
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode()
+        outbox_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        outbox_private_pem = outbox_private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
 
         settings = meeting_module.MeetingSettings(
             app_env=AppEnv.PRODUCTION,
             internal_principal_public_key=public_key_pem,
+            outbox_publication_auth_private_key=outbox_private_pem,
         )
 
         self.assertEqual(settings.internal_principal_public_key, public_key_pem)

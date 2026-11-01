@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Protocol
 
 from app.background_processing import (
@@ -12,6 +13,10 @@ from app.background_processing import (
     JobSubmissionReceipt,
 )
 from shared.schemas.ai_job_envelope import AIProcessingJobEnvelope
+from shared.jobs.outbox_policy import (
+    OutboxFailureCategory,
+    OutboxPublicationError,
+)
 from shared.security.background_job_authorization import issue_job_authorization
 
 
@@ -25,7 +30,12 @@ class CelerySubmissionError(RuntimeError):
 
 class CeleryTaskPublisher(Protocol):
     def send_task(
-        self, name: str, *, args: list[dict[str, object]], task_id: str
+        self,
+        name: str,
+        *,
+        args: list[dict[str, object]],
+        task_id: str,
+        headers: dict[str, str] | None = None,
     ): ...
 
 
@@ -58,8 +68,8 @@ class CeleryJobSubmissionPort:
             settings = get_settings()
         signing_key = getattr(settings, "background_job_signing_private_key", None)
         if signing_key is None:
-            raise CelerySubmissionError(
-                "Background job signing is not configured; the job was not submitted."
+            raise OutboxPublicationError(
+                OutboxFailureCategory.CONFIGURATION_INVALID
             )
         return cls(
             publisher,
@@ -118,8 +128,79 @@ class CeleryJobSubmissionPort:
                 "Celery broker submission failed; the job was not accepted."
             ) from None
         if getattr(result, "id", None) != str(job.job_id):
-            raise RuntimeError("Celery returned an unexpected task identifier.")
+            raise OutboxPublicationError(OutboxFailureCategory.PROTOCOL_ERROR)
         return JobSubmissionReceipt(job_id=job.job_id)
+
+    async def publish_outbox_event(
+        self,
+        *,
+        event_id,
+        owner_id,
+        job_id,
+        event_type: str,
+        payload: dict[str, object],
+    ) -> None:
+        """Sign and publish the persisted outbox envelope through Celery."""
+        await asyncio.to_thread(
+            self._publish_outbox_event,
+            event_id=event_id,
+            owner_id=owner_id,
+            job_id=job_id,
+            event_type=event_type,
+            payload=payload,
+        )
+
+    def _publish_outbox_event(
+        self,
+        *,
+        event_id,
+        owner_id,
+        job_id,
+        event_type: str,
+        payload: dict[str, object],
+    ) -> None:
+        """Synchronous implementation kept off the async event loop."""
+        if event_type != "ai.processing.requested.v1":
+            raise UnsupportedQueueJobError("Unsupported outbox event type.")
+        try:
+            envelope = AIProcessingJobEnvelope.model_validate_json(
+                json.dumps(payload, allow_nan=False, separators=(",", ":"))
+            )
+        except (TypeError, ValueError):
+            raise UnsupportedQueueJobError("Outbox event payload is invalid.") from None
+        if envelope.job_id != job_id:
+            raise UnsupportedQueueJobError("Outbox event identity does not match its job envelope.")
+
+        try:
+            authorization = issue_job_authorization(
+                envelope,
+                owner_id,
+                private_key=self._signing_key,
+                issuer=self._issuer,
+                audience=self._audience,
+                expires_seconds=self._authorization_expire_seconds,
+            )
+        except Exception:
+            raise OutboxPublicationError(
+                OutboxFailureCategory.CONFIGURATION_INVALID
+            ) from None
+        message = {
+            "envelope": envelope.model_dump(mode="json"),
+            "authorization": authorization,
+        }
+        try:
+            result = self._publisher.send_task(
+                "mannerai.process_ai_job",
+                args=[message],
+                task_id=str(job_id),
+                headers={"outbox_event_id": str(event_id)},
+            )
+        except Exception:
+            raise CelerySubmissionError(
+                "Celery broker publication failed; the outbox event was not acknowledged."
+            ) from None
+        if getattr(result, "id", None) != str(job_id):
+            raise OutboxPublicationError(OutboxFailureCategory.PROTOCOL_ERROR)
 
 
 __all__ = [

@@ -235,6 +235,8 @@ class DatabaseFoundationTestCase(unittest.TestCase):
                 "followups",
                 "meeting_insights",
                 "processing_jobs",
+                "meeting_submission_idempotency",
+                "job_outbox_events",
                 "organizations",
                 "organization_memberships",
             },

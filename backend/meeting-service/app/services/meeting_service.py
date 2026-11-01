@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
-from uuid import UUID
+from datetime import timezone
+from uuid import UUID, uuid4
 
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.meeting_repository import MeetingRepository
 from app.repositories.meeting_insight_repository import MeetingInsightRepository
 from app.repositories.organization_repository import OrganizationRepository
+from app.repositories.meeting_submission_repository import MeetingSubmissionRepository
 from app.services.organization_authorization import OrganizationAuthorization, OrganizationPermission
 from app.repositories.transcript_repository import TranscriptRepository
 from shared.database.models.meeting import Meeting, MeetingStatus as ORMMeetingStatus
 from shared.database.models.transcript import Transcript
+from shared.database.models.processing_job import ProcessingJobRecord
+from shared.database.models.job_outbox_event import JobOutboxEvent
 from shared.exceptions.common import ConflictError, ForbiddenError, NotFoundError
 from shared.exceptions.common import ValidationError as AppValidationError
 from shared.schemas.meeting import MeetingCollectionItem, MeetingCreateRequest, MeetingPublic, MeetingUpdate
@@ -24,6 +32,10 @@ from shared.schemas.organization import PersonalOrganizationResponse
 from shared.schemas.processing_status import MeetingProcessingStatus
 from shared.schemas.transcript import TranscriptBase, TranscriptInDB, TranscriptSegment
 from shared.schemas.transcript_indexing import TranscriptIndexSource
+from shared.schemas.meeting_submission import MeetingSubmissionReceipt, MeetingSubmissionRequest
+from shared.schemas.ai_job_envelope import AIProcessingJobEnvelope
+from shared.jobs.lifecycle import JobStatus
+from shared.schemas.transcript import NormalizedTranscript
 
 
 class MeetingService:
@@ -42,6 +54,7 @@ class MeetingService:
         self._insight_repository = MeetingInsightRepository(session)
         self._organization_repository = organization_repository or OrganizationRepository(session)
         self._organization_authorization = OrganizationAuthorization(self._organization_repository)
+        self._submission_repository = MeetingSubmissionRepository(session)
 
     async def create_meeting(
         self,
@@ -66,6 +79,185 @@ class MeetingService:
         created = await self._meeting_repository.create(meeting)
         await self._session.commit()
         return self._meeting_to_public(created)
+
+    async def submit_meeting(
+        self,
+        payload: MeetingSubmissionRequest,
+        authenticated_user_id: UUID,
+        idempotency_key: str,
+    ) -> MeetingSubmissionReceipt:
+        """Atomically persist meeting input, durable job, idempotency and outbox."""
+        if not idempotency_key or idempotency_key != idempotency_key.strip():
+            raise AppValidationError("A valid Idempotency-Key header is required.")
+        if len(idempotency_key) > 255:
+            raise AppValidationError("Idempotency-Key exceeds 255 characters.")
+
+        organization_id = self._parse_uuid(payload.meeting.organization_id, "organization ID")
+        request_hash = self._submission_payload_hash(payload, organization_id)
+        receipt: MeetingSubmissionReceipt
+
+        async with self._session.begin():
+            idempotency_id, existing = await self._submission_repository.claim(
+                owner_id=authenticated_user_id,
+                operation="meeting_submission",
+                idempotency_key=idempotency_key,
+            )
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise ConflictError("Idempotency-Key was already used with a different submission.")
+                await self._organization_authorization.require(
+                    authenticated_user_id,
+                    organization_id,
+                    OrganizationPermission.SUBMIT_MEETING,
+                )
+                if existing.meeting_id is None or existing.transcript_id is None or existing.job_id is None:
+                    raise ConflictError("The original submission receipt is unavailable.")
+                receipt = await self._load_submission_receipt(
+                    owner_id=authenticated_user_id,
+                    organization_id=organization_id,
+                    meeting_id=existing.meeting_id,
+                    transcript_id=existing.transcript_id,
+                    job_id=existing.job_id,
+                )
+            else:
+                await self._organization_authorization.require(
+                    authenticated_user_id,
+                    organization_id,
+                    OrganizationPermission.SUBMIT_MEETING,
+                )
+                meeting = Meeting(
+                    id=uuid4(),
+                    organization_id=organization_id,
+                    created_by=authenticated_user_id,
+                    title=payload.meeting.title,
+                    description=payload.meeting.description,
+                    scheduled_at=payload.meeting.scheduled_at,
+                    participants=payload.meeting.participants,
+                    status=ORMMeetingStatus.PENDING,
+                )
+                meeting = await self._meeting_repository.create(meeting)
+
+                transcript_id = uuid4()
+                try:
+                    normalized = NormalizedTranscript(
+                        meeting_id=meeting.id,
+                        transcript_id=transcript_id,
+                        language=payload.transcript.language,
+                        segments=payload.transcript.segments,
+                    )
+                except PydanticValidationError as error:
+                    raise AppValidationError("Transcript segments are invalid.") from error
+                transcript = Transcript(
+                    id=transcript_id,
+                    meeting_id=meeting.id,
+                    revision_number=1,
+                    segments=self._segments_to_dicts(normalized.segments),
+                    language=normalized.language,
+                )
+                transcript = await self._transcript_repository.create(transcript)
+
+                job_id = uuid4()
+                operations = list(payload.requested_operations)
+                job = ProcessingJobRecord(
+                    job_id=job_id,
+                    meeting_id=meeting.id,
+                    transcript_id=transcript.id,
+                    owner_id=authenticated_user_id,
+                    requested_operations=operations,
+                    status=JobStatus.QUEUED.value,
+                    attempt_count=0,
+                    max_attempts=3,
+                )
+                envelope = AIProcessingJobEnvelope(
+                    job_id=job_id,
+                    meeting_id=meeting.id,
+                    transcript_id=transcript.id,
+                    requested_operations=operations,
+                )
+                outbox = JobOutboxEvent(
+                    id=uuid4(),
+                    job_id=job_id,
+                    owner_id=authenticated_user_id,
+                    event_type="ai.processing.requested.v1",
+                    payload=envelope.model_dump(mode="json"),
+                    status="pending",
+                    attempt_count=0,
+                )
+                # The two mappers have no ORM relationship configured, so a
+                # shared flush does not guarantee dependency ordering. Persist
+                # the referenced job first to satisfy the outbox FK; both
+                # flushes remain inside the surrounding transaction.
+                self._session.add(job)
+                await self._session.flush()
+                self._session.add(outbox)
+                await self._session.flush()
+                await self._submission_repository.complete(
+                    idempotency_id,
+                    owner_id=authenticated_user_id,
+                    operation="meeting_submission",
+                    idempotency_key=idempotency_key,
+                    request_hash=request_hash,
+                    meeting_id=meeting.id,
+                    transcript_id=transcript.id,
+                    job_id=job_id,
+                )
+                await self._session.flush()
+                receipt = MeetingSubmissionReceipt(
+                    meeting_id=meeting.id,
+                    transcript_id=transcript.id,
+                    processing_status=JobStatus.QUEUED,
+                )
+
+        # Returning happens only after the context manager committed all five
+        # records; no broker call occurs in the request transaction.
+        return receipt
+
+    async def _load_submission_receipt(
+        self,
+        *,
+        owner_id: UUID,
+        organization_id: UUID,
+        meeting_id: UUID,
+        transcript_id: UUID,
+        job_id: UUID,
+    ) -> MeetingSubmissionReceipt:
+        meeting = await self._meeting_repository.get_by_id(meeting_id)
+        transcript = await self._transcript_repository.get_revision(meeting_id, transcript_id)
+        job = await self._session.scalar(
+            select(ProcessingJobRecord).where(
+                ProcessingJobRecord.job_id == job_id,
+                ProcessingJobRecord.meeting_id == meeting_id,
+                ProcessingJobRecord.transcript_id == transcript_id,
+                ProcessingJobRecord.owner_id == owner_id,
+            )
+        )
+        if (
+            meeting is None
+            or transcript is None
+            or job is None
+            or meeting.created_by != owner_id
+            or meeting.organization_id != organization_id
+        ):
+            raise ConflictError("The original submission receipt is unavailable.")
+        # This is the original accepted-submission receipt, so its status stays
+        # queued even if the durable job has since advanced through its lifecycle.
+        return MeetingSubmissionReceipt(
+            meeting_id=meeting.id,
+            transcript_id=transcript.id,
+            processing_status=JobStatus.QUEUED,
+        )
+
+    @staticmethod
+    def _submission_payload_hash(
+        payload: MeetingSubmissionRequest, organization_id: UUID
+    ) -> str:
+        canonical = payload.model_dump(mode="json")
+        canonical["meeting"]["organization_id"] = str(organization_id)
+        scheduled_at = payload.meeting.scheduled_at
+        if scheduled_at is not None and scheduled_at.tzinfo is not None:
+            canonical["meeting"]["scheduled_at"] = scheduled_at.astimezone(timezone.utc).isoformat()
+        serialized = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     async def get_personal_organization(
         self, authenticated_user_id: UUID
@@ -227,6 +419,21 @@ class MeetingService:
             raise NotFoundError("Transcript not found.")
         return self._transcript_to_in_db(transcript)
 
+    async def get_transcript_revision(
+        self,
+        meeting_id: str,
+        transcript_id: UUID,
+        authenticated_user_id: UUID,
+    ) -> TranscriptInDB:
+        """Resolve one immutable transcript revision after the owner check."""
+        meeting = await self.require_owned_meeting(meeting_id, authenticated_user_id)
+        transcript = await self._transcript_repository.get_revision(
+            meeting.id, transcript_id
+        )
+        if transcript is None:
+            raise NotFoundError("Transcript not found.")
+        return self._transcript_to_in_db(transcript)
+
     async def get_transcript_index_source(
         self,
         meeting_id: str,
@@ -255,13 +462,13 @@ class MeetingService:
         if transcript is None:
             raise NotFoundError("Transcript not found.")
 
-        updated = await self._transcript_repository.replace_for_meeting(
-            transcript,
+        revision = await self._transcript_repository.create_revision(
+            meeting.id,
             segments=self._segments_to_dicts(segments),
             language=language,
         )
         await self._session.commit()
-        return self._transcript_to_in_db(updated)
+        return self._transcript_to_in_db(revision)
 
     @staticmethod
     def _parse_uuid(value: str, field_name: str) -> UUID:

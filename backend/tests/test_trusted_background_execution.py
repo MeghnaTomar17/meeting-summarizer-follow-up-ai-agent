@@ -106,7 +106,7 @@ class TrustedBackgroundExecutionTests(unittest.IsolatedAsyncioTestCase):
         meetings = MagicMock()
         meetings.get_by_id = AsyncMock(return_value=meeting)
         transcripts = MagicMock()
-        transcripts.get_by_meeting_id = AsyncMock(return_value=transcript)
+        transcripts.get_revision = AsyncMock(return_value=transcript)
         service = self.meeting_module.MeetingService(
             session=MagicMock(),
             meeting_repository=meetings,
@@ -126,7 +126,7 @@ class TrustedBackgroundExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.COMPLETED)
         meetings.get_by_id.assert_awaited_once_with(MEETING_ID)
-        transcripts.get_by_meeting_id.assert_awaited_once_with(MEETING_ID)
+        transcripts.get_revision.assert_awaited_once_with(MEETING_ID, TRANSCRIPT_ID)
         ai_service.process.assert_awaited_once()
 
     async def test_wrong_user_is_rejected_by_existing_ownership_check(self):
@@ -141,7 +141,7 @@ class TrustedBackgroundExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished.status, self.jobs.AIProcessingJobStatus.FAILED)
         self.assertEqual(finished.failure.code, self.jobs.JobFailureCode.EXECUTION_FAILED)
         meetings.get_by_id.assert_awaited_once_with(MEETING_ID)
-        transcripts.get_by_meeting_id.assert_not_awaited()
+        transcripts.get_revision.assert_not_awaited()
         ai_service.process.assert_not_awaited()
 
     async def test_transcript_id_is_checked_after_meeting_service_authorization(self):
@@ -155,7 +155,7 @@ class TrustedBackgroundExecutionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         meetings.get_by_id.assert_awaited_once_with(MEETING_ID)
-        transcripts.get_by_meeting_id.assert_awaited_once_with(MEETING_ID)
+        transcripts.get_revision.assert_awaited_once_with(MEETING_ID, UUID(int=99))
 
     async def test_gateway_context_dependency_is_downstream_of_current_user(self):
         _clear_service_modules()

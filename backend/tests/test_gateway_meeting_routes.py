@@ -46,6 +46,7 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
         self.user = User(id=uuid.uuid4(), email="owner@example.com", password_hash="hash", created_at=now, updated_at=now)
         self.meeting_client = MagicMock()
         self.meeting_client.create_meeting = AsyncMock()
+        self.meeting_client.submit_meeting = AsyncMock()
         self.meeting_client.get_meeting = AsyncMock()
         self.meeting_client.list_owned_meetings = AsyncMock()
         self.meeting_client.get_personal_organization = AsyncMock()
@@ -84,6 +85,39 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
         self.assertEqual(submitted.title, "Planning")
         self.assertEqual(self.meeting_client.create_meeting.await_args.kwargs["user_id"], self.user.id)
         self.assertEqual(self.meeting_client.create_meeting.await_args.kwargs["request_id"], "gateway-meeting-create")
+
+    def test_atomic_submission_forwards_idempotency_key_and_authenticated_owner(self) -> None:
+        from shared.schemas.meeting_submission import MeetingSubmissionReceipt
+
+        receipt = MeetingSubmissionReceipt(
+            meeting_id=uuid.uuid4(),
+            transcript_id=uuid.uuid4(),
+            processing_status="queued",
+        )
+        self.meeting_client.submit_meeting.return_value = receipt
+        body = {
+            "meeting": {"organization_id": str(uuid.uuid4()), "title": "Planning"},
+            "transcript": {"language": "en", "segments": [{"index": 0, "text": "Review plan."}]},
+            "requested_operations": ["summary"],
+        }
+        response = self.client.post(
+            "/api/v1/meetings/submit",
+            json=body,
+            headers={"Idempotency-Key": "submission-1", "X-Request-ID": "atomic-submit"},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        args = self.meeting_client.submit_meeting.await_args
+        self.assertEqual(args.kwargs["idempotency_key"], "submission-1")
+        self.assertEqual(args.kwargs["user_id"], self.user.id)
+        self.assertEqual(args.kwargs["request_id"], "atomic-submit")
+
+        body["owner_id"] = str(uuid.uuid4())
+        rejected = self.client.post(
+            "/api/v1/meetings/submit",
+            json=body,
+            headers={"Idempotency-Key": "submission-2"},
+        )
+        self.assertEqual(rejected.status_code, 422)
 
     def test_gateway_forwards_owner_and_preserves_forbidden_response(self) -> None:
         from shared.exceptions.common import ForbiddenError
@@ -220,6 +254,70 @@ class GatewayMeetingRoutesTestCase(unittest.TestCase):
                 public_key=public_key,
                 algorithm="RS256",
                 issuer="gateway-service",
+                audience="meeting-service",
+            ),
+            self.user.id,
+        )
+
+    def test_meeting_client_forwards_idempotency_key_with_signed_principal(self) -> None:
+        from app.config.settings import GatewaySettings
+        from app.services.meeting_client import MeetingServiceClient
+        from shared.schemas.meeting_submission import MeetingSubmissionRequest
+        from shared.security.internal_principal import verify_internal_principal
+
+        settings = GatewaySettings(_env_file=None)
+        private_key = serialization.load_pem_private_key(
+            settings.internal_principal_private_key.get_secret_value().encode(), password=None
+        )
+        public_key = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode()
+        request_payload = MeetingSubmissionRequest.model_validate(
+            {
+                "meeting": {"organization_id": str(uuid.uuid4()), "title": "Planning"},
+                "transcript": {"language": "en", "segments": [{"index": 0, "text": "Review plan."}]},
+                "requested_operations": ["summary"],
+            }
+        )
+        expected = {
+            "meeting_id": str(uuid.uuid4()),
+            "transcript_id": str(uuid.uuid4()),
+            "processing_status": "queued",
+        }
+        transport = MagicMock()
+        transport.request = AsyncMock(
+            return_value=importlib.import_module("app.services.meeting_client").httpx.Response(
+                201, json=expected
+            )
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=transport)
+        context.__aexit__ = AsyncMock(return_value=False)
+        service_client = MeetingServiceClient(settings)
+
+        with patch.object(importlib.import_module("app.services.meeting_client").httpx, "AsyncClient", return_value=context):
+            result = asyncio.run(
+                service_client.submit_meeting(
+                    request_payload,
+                    idempotency_key="owner-key-1",
+                    user_id=self.user.id,
+                    request_id="submit-correlation",
+                )
+            )
+
+        self.assertEqual(str(result.meeting_id), expected["meeting_id"])
+        args = transport.request.await_args.args
+        kwargs = transport.request.await_args.kwargs
+        self.assertEqual(args[0:2], ("POST", "/meetings/submit"))
+        self.assertEqual(kwargs["headers"]["Idempotency-Key"], "owner-key-1")
+        self.assertEqual(kwargs["headers"]["X-Request-ID"], "submit-correlation")
+        principal = kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        self.assertEqual(
+            verify_internal_principal(
+                principal,
+                public_key=public_key,
+                algorithm=settings.internal_principal_algorithm,
+                issuer=settings.internal_principal_issuer,
                 audience="meeting-service",
             ),
             self.user.id,

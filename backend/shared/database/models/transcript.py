@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, Text
+from sqlalchemy import ForeignKey, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,7 +17,13 @@ from shared.database.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class Transcript(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Transcript metadata and structured segments for a meeting."""
+    """Immutable transcript revision with stable identity for processing jobs."""
+
+    __table_args__ = (
+        UniqueConstraint(
+            "meeting_id", "revision_number", name="uq_transcripts_meeting_revision"
+        ),
+    )
 
     __tablename__ = "transcripts"
 
@@ -25,9 +31,10 @@ class Transcript(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UUID(as_uuid=True),
         ForeignKey("meetings.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
+
+    revision_number: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
 
     segments: Mapped[list[Any]] = mapped_column(
         JSONB,
@@ -42,5 +49,5 @@ class Transcript(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     meeting: Mapped["Meeting"] = relationship(
         "Meeting",
-        back_populates="transcript",
+        back_populates="transcripts",
     )

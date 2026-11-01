@@ -28,9 +28,10 @@ class MeetingServiceTranscriptInputProvider:
         ):
             raise PermissionError("Trusted execution context is required.")
 
-        # MeetingService performs the canonical ownership check before lookup.
-        transcript = await self._meeting_service.get_transcript(
-            str(meeting_id), execution_context.user_id
+        # MeetingService checks meeting ownership and resolves the exact
+        # immutable revision referenced by the durable job.
+        transcript = await self._meeting_service.get_transcript_revision(
+            str(meeting_id), transcript_id, execution_context.user_id
         )
         if transcript.meeting_id != str(meeting_id) or transcript.id != str(transcript_id):
             # Do not disclose whether a different transcript exists.

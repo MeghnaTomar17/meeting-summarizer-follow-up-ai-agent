@@ -6,7 +6,7 @@ Service ownership: gateway-service (delegates to meeting-service).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
 
 from app.auth.dependencies import get_current_user
 from app.config.settings import GatewaySettings, get_settings
@@ -21,6 +21,7 @@ from shared.schemas.meeting import (
 )
 from shared.schemas.pagination import PaginatedResponse, PaginationParams
 from shared.schemas.transcript import TranscriptInDB, TranscriptWrite
+from shared.schemas.meeting_submission import MeetingSubmissionReceipt, MeetingSubmissionRequest
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -46,6 +47,22 @@ async def create_meeting(
 ) -> MeetingPublic:
     return await client.create_meeting(
         payload,
+        user_id=current_user.id,
+        request_id=_request_id(request),
+    )
+
+
+@router.post("/submit", response_model=MeetingSubmissionReceipt, status_code=status.HTTP_201_CREATED)
+async def submit_meeting(
+    payload: MeetingSubmissionRequest,
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
+    current_user: User = Depends(get_current_user),
+    client: MeetingServiceClient = Depends(get_meeting_client),
+) -> MeetingSubmissionReceipt:
+    return await client.submit_meeting(
+        payload,
+        idempotency_key=idempotency_key,
         user_id=current_user.id,
         request_id=_request_id(request),
     )

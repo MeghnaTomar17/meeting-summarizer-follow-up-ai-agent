@@ -74,7 +74,8 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.meeting_repository.update_status = AsyncMock()
         self.transcript_repository.create = AsyncMock()
         self.transcript_repository.get_by_meeting_id = AsyncMock()
-        self.transcript_repository.replace_for_meeting = AsyncMock()
+        self.transcript_repository.create_revision = AsyncMock()
+        self.transcript_repository.get_revision = AsyncMock()
         self.service = self.MeetingService(
             self.session,
             self.meeting_repository,
@@ -101,6 +102,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         return self.Transcript(
             id=uuid.uuid4(),
             meeting_id=meeting_id or uuid.uuid4(),
+            revision_number=1,
             segments=[{"index": 0, "text": "Plan the release."}],
             language="en",
             created_at=now,
@@ -436,6 +438,24 @@ class MeetingServiceTestCase(unittest.TestCase):
             asyncio.run(self.service.get_transcript(str(meeting.id), self.user_id))
         self.session.commit.assert_not_called()
 
+    def test_get_transcript_revision_scopes_by_owned_meeting_and_stable_id(self) -> None:
+        meeting = self._meeting()
+        transcript = self._transcript(meeting.id)
+        self.meeting_repository.get_by_id.return_value = meeting
+        self.transcript_repository.get_revision.return_value = transcript
+
+        result = asyncio.run(
+            self.service.get_transcript_revision(
+                str(meeting.id), transcript.id, self.user_id
+            )
+        )
+
+        self.assertEqual(result.id, str(transcript.id))
+        self.transcript_repository.get_revision.assert_awaited_once_with(
+            meeting.id, transcript.id
+        )
+        self.session.commit.assert_not_called()
+
     def test_index_source_contains_persisted_transcript_and_meeting_organization(self) -> None:
         meeting = self._meeting()
         transcript = self._transcript(meeting.id)
@@ -463,12 +483,14 @@ class MeetingServiceTestCase(unittest.TestCase):
     def test_replace_transcript_maps_segments_and_commits_once(self) -> None:
         meeting = self._meeting()
         transcript = self._transcript(meeting.id)
+        original_segments = list(transcript.segments)
         updated = self._transcript(transcript.meeting_id)
         updated.segments = [{"index": 1, "text": "Ship next week."}]
         updated.language = "fr"
         self.transcript_repository.get_by_meeting_id.return_value = transcript
         self.meeting_repository.get_by_id.return_value = meeting
-        self.transcript_repository.replace_for_meeting.return_value = updated
+        updated.revision_number = transcript.revision_number + 1
+        self.transcript_repository.create_revision.return_value = updated
         segments = [self.TranscriptSegment(index=1, text="Ship next week.")]
 
         result = asyncio.run(
@@ -480,11 +502,13 @@ class MeetingServiceTestCase(unittest.TestCase):
             )
         )
 
-        self.transcript_repository.replace_for_meeting.assert_awaited_once_with(
-            transcript,
+        self.transcript_repository.create_revision.assert_awaited_once_with(
+            meeting.id,
             segments=[{"index": 1, "speaker": None, "text": "Ship next week.", "start_ms": None, "end_ms": None}],
             language="fr",
         )
+        self.assertEqual(transcript.segments, original_segments)
+        self.assertEqual(updated.revision_number, 2)
         self.assertEqual(result.language, "fr")
         self.session.commit.assert_awaited_once()
 
@@ -503,7 +527,7 @@ class MeetingServiceTestCase(unittest.TestCase):
                 )
             )
 
-        self.transcript_repository.replace_for_meeting.assert_not_called()
+        self.transcript_repository.create_revision.assert_not_called()
         self.session.commit.assert_not_called()
 
     def test_invalid_transcript_uuid_raises_validation_error_without_commit(self) -> None:
@@ -562,7 +586,7 @@ class MeetingServiceTestCase(unittest.TestCase):
         self.meeting_repository.update.assert_not_called()
         self.meeting_repository.update_status.assert_not_called()
         self.transcript_repository.create.assert_not_called()
-        self.transcript_repository.replace_for_meeting.assert_not_called()
+        self.transcript_repository.create_revision.assert_not_called()
         self.session.commit.assert_not_called()
 
 

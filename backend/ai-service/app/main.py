@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.config.settings import get_settings
-from app.routes import router as internal_router
+from app.routes import outbox_router, router as internal_router
 from shared.utils.health import health_payload
 from shared.utils.service_bootstrap import (
     init_service_logging,
@@ -29,6 +29,7 @@ register_logging_middleware(app)
 register_exception_handlers(app)
 
 app.include_router(internal_router)
+app.include_router(outbox_router)
 
 
 @app.get("/health")

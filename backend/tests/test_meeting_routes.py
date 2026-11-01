@@ -48,6 +48,7 @@ class MeetingRouteTestCase(unittest.TestCase):
         self.authenticated_user_id = uuid.uuid4()
         self.service = MagicMock()
         self.service.create_meeting = AsyncMock()
+        self.service.submit_meeting = AsyncMock()
         self.service.get_meeting = AsyncMock()
         self.service.list_meetings = AsyncMock()
         self.service.list_owned_meetings = AsyncMock()
@@ -161,6 +162,42 @@ class MeetingRouteTestCase(unittest.TestCase):
         submitted = self.service.create_meeting.await_args.args[0]
         self.assertEqual(submitted.model_dump(exclude_none=True), payload)
         self.service.get_meeting.assert_not_called()
+
+    def test_atomic_submission_uses_verified_owner_and_header_key(self) -> None:
+        from shared.schemas.meeting_submission import MeetingSubmissionReceipt
+
+        receipt = MeetingSubmissionReceipt(
+            meeting_id=uuid.uuid4(),
+            transcript_id=uuid.uuid4(),
+            processing_status="queued",
+        )
+        self.service.submit_meeting.return_value = receipt
+        response = self.client.post(
+            "/meetings/submit",
+            headers={"Idempotency-Key": "meeting-submit-1"},
+            json={
+                "meeting": {"organization_id": str(uuid.uuid4()), "title": "Planning"},
+                "transcript": {"language": "en", "segments": [{"index": 0, "text": "Review plan."}]},
+                "requested_operations": ["summary"],
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        args = self.service.submit_meeting.await_args
+        self.assertEqual(args.args[1], self.authenticated_user_id)
+        self.assertEqual(args.args[2], "meeting-submit-1")
+
+        rejected = self.client.post(
+            "/meetings/submit",
+            headers={"Idempotency-Key": "meeting-submit-2"},
+            json={
+                "meeting": {"organization_id": str(uuid.uuid4()), "title": "Planning"},
+                "owner_id": str(uuid.uuid4()),
+                "transcript": {"language": "en", "segments": [{"index": 0, "text": "Review plan."}]},
+                "requested_operations": ["summary"],
+            },
+        )
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(self.service.submit_meeting.await_count, 1)
 
     def test_get_meeting_returns_dto_from_service(self) -> None:
         meeting_id = uuid.uuid4()

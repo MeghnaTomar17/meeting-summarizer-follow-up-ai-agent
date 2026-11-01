@@ -170,6 +170,7 @@ class OpenAIProviderTestCase(unittest.IsolatedAsyncioTestCase):
 
     def test_production_provider_factory_rejects_missing_required_configuration(self):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        publication_auth_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         private_key = key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
@@ -182,6 +183,10 @@ class OpenAIProviderTestCase(unittest.IsolatedAsyncioTestCase):
             openai_model=None,
             background_job_signing_private_key=private_key,
             internal_principal_public_key=key.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            ).decode(),
+            outbox_publication_auth_public_key=publication_auth_key.public_key().public_bytes(
                 serialization.Encoding.PEM,
                 serialization.PublicFormat.SubjectPublicKeyInfo,
             ).decode(),
