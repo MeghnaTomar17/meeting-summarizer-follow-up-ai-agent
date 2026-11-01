@@ -10,6 +10,7 @@ import unittest
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 BACKEND = Path(__file__).resolve().parents[1]
 AI_ROOT = BACKEND / "ai-service"
@@ -192,9 +193,12 @@ class CrossMeetingAnswerServiceTests(unittest.IsolatedAsyncioTestCase):
             "structured": structured, "semantic": self.evidence.semantic
         })
         provider = FakeProvider()
-        result = await self.Service(provider).answer(
-            self._request("Which tasks missed their deadlines?", evidence=evidence)
-        )
+        service_module = importlib.import_module("app.cross_meeting_answers")
+        with patch.object(service_module, "datetime") as application_clock:
+            application_clock.now.return_value = exactly_now.due_at
+            result = await self.Service(provider).answer(
+                self._request("Which tasks missed their deadlines?", evidence=evidence)
+            )
         self.assertTrue(result.insufficient_evidence)
         self.assertEqual(provider.requests, [])
 
