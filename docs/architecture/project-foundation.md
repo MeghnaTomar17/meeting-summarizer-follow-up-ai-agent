@@ -1190,8 +1190,8 @@ migration. The applied revision is `0001_meetings_transcripts`.
 ### Repositories and service/use cases
 
 `MeetingRepository` provides `create`, `get_by_id`, `list_by_organization`, and
-`update_status`; `TranscriptRepository` provides `get_by_meeting_id`, `create`,
-and `replace_for_meeting`. They accept UUIDs/ORM entities, use `select`,
+`update_status`; `TranscriptRepository` provides latest-revision lookup, exact
+revision lookup, initial `create`, and `create_revision`. They accept UUIDs/ORM entities, use `select`,
 `AsyncSession.execute`, `add`, and `flush`, and return ORM entities. They never
 commit, rollback, return DTOs, or apply business decisions.
 
@@ -1204,10 +1204,11 @@ future multi-repository use cases in one transaction.
 
 Current use cases: `create_meeting`, `get_meeting`, `list_meetings`,
 `update_meeting_status`, `create_transcript`, `get_transcript`, and
-`replace_transcript`. No status-transition graph and no PostgreSQL upsert have
-been introduced. Creating a transcript requires an existing meeting and no
-existing transcript; replacement requires an existing transcript and never
-creates one.
+`replace_transcript`. Transcript replacement appends an immutable revision
+under a meeting-row lock; existing transcript UUIDs remain stable so registered
+jobs continue to resolve their original content. Creating an initial transcript
+requires an existing meeting and no existing transcript; replacement requires
+an existing transcript and never creates one.
 
 ### Explicit DTO/ORM mapping and errors
 

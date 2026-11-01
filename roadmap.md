@@ -125,8 +125,11 @@ As of the current project state:
 * Gateway authentication and authenticated internal service identity are implemented.
 * AI Service foundation and five agent contracts are implemented.
 * Real LLM/provider execution is not yet implemented.
-* AI-result persistence integration is not yet implemented.
-* Worker/Celery processing is not yet implemented.
+* AI-result persistence is integrated with the durable worker lifecycle for
+  supported mapped domain outputs; live end-to-end verification remains
+  environment-dependent.
+* Worker/Celery processing has its signed task and durable lifecycle path; live
+  broker/worker deployment verification remains environment-dependent.
 * Redis production integration is not yet implemented.
 * Qdrant/Search Service is not yet implemented.
 * Frontend is not yet implemented.
@@ -968,7 +971,19 @@ This issue is documented in the engineering/problem-solving log.
 
 # 13. Phase 7 — AI Meeting Intelligence Integration
 
-## Status: NEXT
+## Status: IN PROGRESS
+
+### Current implementation checkpoint — Block 2C
+
+The configured local Ollama provider/model boundary and mock-only adapter tests
+are implemented for `ollama` / `llama3.2:3b`. Structured agent outputs now have
+finite application-level item and text limits. These output-contract limits do
+not constitute token-budget enforcement.
+
+Generation remains fail-closed until a complete prompt counter is proven against
+the exact installed model artifact and Ollama runtime, the effective `num_ctx` is
+explicitly established, and bounded per-agent output reserves and safety margins
+are selected. No paid fallback or live generation is enabled.
 
 Phase 7 builds the **actual meeting intelligence pipeline on top of the completed Phase 6 AI foundation**.
 
@@ -1179,7 +1194,34 @@ Do not require external provider credentials for the normal test suite.
 
 # 14. Phase 8 — Background Processing
 
-## Status: NOT STARTED
+## Status: IN PROGRESS
+
+### Current checkpoint — atomic Meeting Service submission
+
+Transcript storage now supports immutable, ordered revisions while preserving
+existing transcript UUIDs for durable job references. Transcript replacement
+appends a revision, and background execution resolves the exact revision bound
+to its job. `POST /api/v1/meetings/submit` now persists a meeting, transcript
+revision, processing job, owner-scoped idempotency receipt, and pending outbox
+event in one PostgreSQL transaction. Matching owner/key/payload requests replay
+the original receipt; payload mismatches conflict. A one-event relay now accepts
+a committed claim, publishes the existing signed AI job envelope through Celery,
+and marks the event published only after successful publication and a
+lease-token-conditional database acknowledgment. Delivery remains at-least-once;
+the stable outbox event ID is carried in a Celery header and the job ID remains
+the task/lifecycle identity. A one-shot runtime now commits one claim, closes
+the claim session, then invokes the injected relay. Polling, scheduling, retry
+policy, and live PostgreSQL verification of this runtime composition remain
+pending. The runtime now has an explicit Meeting Service-owned command:
+`docker compose exec meeting-service python -m app.outbox_dispatch_once`.
+It is not invoked during API startup and is not registered in Worker Service.
+The command initializes and closes its own database lifecycle and processes at
+most one event; it uses the existing `PROCESSING_JOB_LEASE_SECONDS` as the claim
+lease horizon. Live command-to-AI/broker verification remains pending.
+Meeting-to-AI publication now uses a dedicated audience-bound service
+principal; only AI Service holds the job-signing private key. Provisioning the
+separate service-auth key pair and validating live service/broker connectivity
+remain deployment tasks.
 
 AI processing must not block normal HTTP requests.
 
@@ -1229,7 +1271,34 @@ Phase 8 should consume the synchronous AI intelligence pipeline established in P
 
 # 15. Phase 9 — Redis & Celery Production Integration
 
-## Status: NOT STARTED
+## Status: IN PROGRESS
+
+### Current checkpoint — durable processing and domain result persistence
+
+Phase 9 already has environment-driven Celery/Redis configuration, a signed
+AI-owned publisher, Worker Service envelope verification, a PostgreSQL job
+lifecycle with bounded retry/lease behavior, and owner/transcript target
+authorization before execution. Worker processing resolves the immutable
+transcript revision and delegates to the existing AI processing contracts.
+Terminal job status and result JSON are persisted by the lifecycle.
+
+Successful and partially successful mapped operations now also persist to the
+existing meeting domain tables (summary versions, tasks, decisions, follow-up
+drafts, and insights) within the same PostgreSQL transaction that records the
+terminal job result. Existing Meeting Service read endpoints expose those
+records under their authenticated owner scope. Replayed terminal jobs remain
+no-ops, so completed outputs are not inserted again. Failed operations do not
+create domain records, while successful outputs of a partial job are retained.
+
+Mock-backed coverage proves result identity checks, domain mappings,
+transaction-coupled persistence, duplicate terminal no-op, and failure
+behavior. No live PostgreSQL result-persistence run or deployed end-to-end
+Meeting → AI → broker → Worker → Meeting verification is claimed. Local Ollama
+generation also remains fail-closed pending exact token-budget verification.
+
+Remaining Phase 9 work includes live deployment verification and any remaining
+operational hardening from the responsibilities below; no additional poller or
+scheduler is introduced by this checkpoint.
 
 Implement:
 

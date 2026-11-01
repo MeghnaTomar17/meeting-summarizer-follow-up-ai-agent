@@ -574,3 +574,258 @@ and no skip, and its expanded lease-reclamation/fencing scenario also passed.
 “When a fixture violates an existing API contract, align the fixture with the
 project setting source instead of weakening production validation to satisfy
 the test.”
+
+## PS-024 — Finite AI response contracts do not prove token fit
+
+### Context and decision
+
+The Ollama generation boundary needs finite response limits, but character
+counts and item counts are not tokenizer measurements. Ollama 0.40.12 exposes a
+non-generation chat-template render path, while the installed model's effective
+context and tokenizer parity against its `b11901` runtime remain unverified.
+
+### Solution and limitation
+
+Summary, task, decision, follow-up, insight, and cross-meeting answer schemas now
+bound response items and variable-length fields. These caps make validation and
+response shape finite; they are not a token reserve. The provider continues to
+block before HTTP until complete request tokenization, runtime context, and
+per-agent generation limits are verified. No model generation or paid fallback
+was added.
+
+### Validation
+
+Mock-only contract-boundary tests reject oversized text and collections. A local
+`_debug_render_only` render remains an operator-run check; exact tokenizer parity
+and live generation remain unverified.
+
+## PS-025 — Durable jobs must resolve immutable transcript revisions
+
+### Context and decision
+
+The existing `transcripts` table allowed one mutable row per meeting, while a
+processing job already records a stable `transcript_id`. Replacing transcript
+segments in place could therefore change the input observed by a delayed or
+retried job.
+
+### Solution and limitation
+
+Migration `0008_transcript_revisions` retains existing transcript UUIDs as
+revision 1, adds a per-meeting revision number and uniqueness constraint, and
+allows later edits to append a row under a meeting lock. Worker transcript
+resolution now reads the exact revision ID in the signed job. Downgrade refuses
+to discard data when any meeting has multiple revisions. This is the persistence
+foundation only: idempotent meeting submission, job/outbox creation in one
+transaction, and the signed outbox relay remain unimplemented.
+
+### Validation
+
+Mock-only schema, repository, service, AI integration, and trusted-worker tests
+pass. A dedicated disposable PostgreSQL migration test covers backfill,
+uniqueness, downgrade protection, downgrade, and re-upgrade, but was skipped
+because its explicit opt-in was not enabled; live migration behavior remains
+unverified.
+
+## PS-026 — Atomic submissions require durable idempotency and an outbox
+
+### Context and decision
+
+Meeting, transcript, and processing-job writes previously used separate service
+operations, while publishing before commit could expose a job whose input later
+rolled back. The worker already accepts a strict signed envelope and the job
+lifecycle is already persisted in `processing_jobs`.
+
+### Solution and limitation
+
+`POST /api/v1/meetings/submit` now derives owner identity from Gateway's
+verified principal, checks organization membership, and commits the meeting,
+immutable transcript revision, lifecycle row, idempotency record, and pending
+outbox event in one transaction. Transaction-scoped advisory locks serialize
+same-owner/operation/key attempts; the composite unique index protects the
+invariant. The outbox payload is the existing strict envelope, while owner
+identity is kept separately for the AI-side signing publisher. No queue call
+occurs in the transaction. One-event publication and token-conditional
+acknowledgment are described in PS-027. One-shot composition is recorded in
+PS-028; polling, scheduling, and retry policy remain pending.
+
+The request rejects transcript text above the existing 100,000-character
+sanitization policy instead of silently truncating it. The receipt returns
+stable meeting/transcript IDs and initial queued status without exposing signed
+authorization or internal job records.
+
+### Validation
+
+Mock-only route/client and request-contract tests cover authentication
+forwarding, owner-field rejection, key forwarding, payload hashing, and schema
+constraints. An opt-in test against an empty database whose name ends in
+`_disposable_test` exercises atomicity, owner isolation, replay/conflict,
+rollback, revision immutability, and concurrent duplicates. Its live execution
+was not verified in this environment.
+
+## PS-027 — Outbox publication is at-least-once
+
+### Context and decision
+
+The durable outbox needs a broker publication boundary that cannot mark an
+event published before Celery accepts its message. The worker already verifies
+an AI-signed strict job envelope and uses the job ID for lifecycle idempotency.
+
+### Solution and limitation
+
+The one-event relay publishes outside database transactions, then marks the row
+published in a separate transaction only when the same pending event still has
+the caller's live lease token. A stale acknowledgment changes no row. The AI
+Celery publisher preserves the existing envelope signature, task name, and job
+task ID, and propagates the stable outbox UUID in a Celery header. Broker
+publication followed by acknowledgment failure can cause redelivery; this is
+at-least-once behavior, not exactly-once delivery. Broker failure leaves the
+pending lease to expire for later reclaim. No poller, scheduler, or retry
+policy is included in this slice.
+
+### Validation
+
+Mock-only tests cover publication/signature identity, failure ordering, stale
+lease acknowledgment, database acknowledgment failure, and caller-owned
+transactions. The opt-in disposable PostgreSQL test now covers persisted
+acknowledgment and stale-token rejection; live execution remains unverified in
+this environment.
+
+## PS-028 — Compose one claim per explicit outbox invocation
+
+### Context and decision
+
+The relay accepts a committed event claim, but callers need a safe composition
+that creates that claim without holding a transaction open during broker I/O.
+
+### Solution and limitation
+
+`OneShotOutboxRuntime.run_once()` opens the existing Meeting Service session,
+claims at most one eligible event in a caller-owned transaction, commits, and
+closes the claim session before calling the existing relay. The publisher is
+injected through the existing relay boundary, so Meeting Service does not
+receive AI signing credentials or new broker configuration. No work returns a
+typed `no_work` result. Relay/publish errors propagate after the claim commit;
+the durable lease remains pending and can be reclaimed after expiry. Delivery
+remains at-least-once. This is an explicit one-shot callable, not a poller,
+scheduler, retry policy, or deployed worker entry point.
+
+### Validation
+
+Mock-only tests cover no-work behavior, commit/session-close ordering, lease
+forwarding, single-event bounds, and failure propagation. An opt-in disposable
+PostgreSQL test verifies the committed lease is visible to the relay and that
+one invocation claims only one event; that new case has not been run live in
+the current environment.
+
+## PS-029 — Keep outbox authorization separate from user and job identity
+
+### Context and decision
+
+Meeting Service must ask AI Service to sign and publish an outbox event without
+receiving the AI job-signing private key or borrowing a Gateway user principal.
+
+### Solution and threat assumptions
+
+The AI-owned `/internal/jobs/outbox-events` endpoint verifies a dedicated,
+short-lived RS256 service principal with issuer/subject `meeting-service` and
+audience `ai-service:outbox-publication`. Meeting Service holds only its
+dedicated assertion private key; AI Service holds its matching verification
+public key and separately retains `BACKGROUND_JOB_SIGNING_PRIVATE_KEY`. The
+endpoint accepts a strict existing job envelope, validates event type and
+event/job identity, then delegates signing and Celery publication to the
+existing `CeleryJobSubmissionPort`. Publication errors are sanitized and
+propagate through the Meeting Service adapter so the outbox relay does not
+acknowledge them. Duplicate requests preserve event UUID and job/task UUID;
+the assertion itself is not a one-use replay token.
+
+This trusts Meeting Service to request publication for persisted outbox data
+and assumes internal service traffic uses the deployment's protected network
+and TLS. Provision a dedicated RSA-2048+ pair through the deployment secret
+manager, private in Meeting Service and public in AI Service. Never reuse the
+Gateway principal or worker job-authorization keys. Since only one verifier
+key is configured, rotate during a dispatch pause by coordinated deployment;
+overlapping rotation needs a later `kid`/key-ring design. Compose maps secret
+environment variables but does not generate or provision key material.
+
+### Validation
+
+Mocked boundary tests cover authentication, schema and identity rejection,
+AI-owned signing, Celery task/header identity, broker failure, duplicate
+publication, and request-ID forwarding. Live service-to-service and broker
+connectivity are not implied by these tests.
+
+## PS-031 — Persist mapped AI outputs with terminal job state
+
+### Context and decision
+
+The worker already stored the typed aggregate result JSON and terminal lifecycle
+state in `processing_jobs`, but successful mapped operation outputs were not
+inserted into the existing Summary, Task, Decision, Follow-up, or Meeting Insight
+tables. Their owner-scoped Meeting Service APIs therefore could not return the
+worker-generated records.
+
+### Solution and failure behavior
+
+The Worker Service runtime now injects the Meeting Service-owned
+`persist_processing_result` function into `PostgresJobLifecycle`. On completed
+or partial jobs, `ProcessingJobService.complete()` calls it after verifying the
+current running lease while still inside the transaction that writes terminal
+status and result JSON. It validates meeting/transcript/operation identities
+against the registered job and validates each successful output against the
+existing shared domain schemas. Successful operations write to the existing
+domain tables; failed operations write no domain rows. Summary version numbers
+are allocated after locking the meeting row, preserving the existing unique
+meeting/version contract. Task assignees and due dates remain only what the
+existing mapped contract supplies; no names, IDs, or dates are fabricated.
+
+If persistence or the lifecycle update fails, the database transaction rolls
+back both domain rows and terminal result/status. The running job's lease can
+then expire for existing lifecycle recovery. Once committed, duplicate delivery
+sees terminal state and does not repeat persistence. No migration or public API
+contract change was needed; existing authenticated domain endpoints expose the
+persisted records.
+
+### Validation and limitations
+
+Mock-backed tests cover all five mapped operation types, identity mismatch,
+partial-operation omission, same-transaction lifecycle callback, callback
+failure, terminal duplicate no-op, and worker runtime wiring. They do not prove
+PostgreSQL transaction behavior or deployed Worker/Meeting connectivity. Exact
+Ollama token-budget accounting remains fail-closed, so this work does not claim
+that live model generation can currently produce these outputs.
+
+## PS-030 — Invoke outbox dispatch from a Meeting Service command
+
+### Context and decision
+
+The one-shot runtime was callable in tests but had no operational invocation
+boundary. Dispatching at API startup would couple request-serving availability
+to AI publication, while putting Meeting Service credentials in Worker Service
+would cross the established service ownership boundary.
+
+### Solution and operational contract
+
+`app.outbox_dispatch_once` is a Meeting Service-owned command. Invoke it in the
+running Meeting Service container with
+`docker compose exec meeting-service python -m app.outbox_dispatch_once`. It
+initializes Meeting Service database resources, invokes the existing runtime
+once, then closes resources on success, no-work, startup/runtime failure, and
+shutdown failure paths. Runtime/publish errors remain errors; the command only
+prints their type and directs operators to service logs, avoiding exception
+text that could contain credentials. API lifespan remains database-only, and
+Worker Service task discovery is unchanged. The command uses the existing
+`PROCESSING_JOB_LEASE_SECONDS` as `locked_until`; this avoids an ungrounded new
+lease setting but means recovery after a publish failure waits for that lease
+to expire. No poller, scheduler, or retry policy is included.
+
+### Validation and deployment requirements
+
+Mock-only tests cover one invocation, no-work, failure cleanup, invalid
+configuration, sanitized CLI errors, API-startup isolation, and absence from
+Worker Service registration. They do not establish live PostgreSQL, AI Service,
+service-authentication, or broker connectivity. The Meeting Service container
+must have its database URL, AI service URL, and dedicated
+`OUTBOX_PUBLICATION_AUTH_PRIVATE_KEY`; the AI Service must have its matching
+verification public key and its own background-job signing key. Execute the
+command only after those deployment secrets/configuration and the AI/Celery
+dependencies have been provisioned.
