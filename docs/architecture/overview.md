@@ -6,7 +6,7 @@
 
 ## System context
 
-The platform persists meetings, transcripts, and domain results behind a Gateway and Meeting Service. Phase 7 implements and tests the AI application path from a caller-supplied transcript through normalization, orchestration, five agents, an injected provider, typed output validation, and domain mapping. `AIProcessingService` returns trusted, domain-ready inputs with operation-level failures; it does not retrieve transcripts from storage or persist results. Phase 8 adds a process-local job-submission boundary whose executor delegates to that existing service. The OpenAI adapter is one `ModelProvider` implementation. Deterministic integration tests use a test-only provider and make no network calls.
+The platform persists meetings, transcripts, and domain results behind a Gateway and Meeting Service. Phase 7 implements and tests the AI application path from a caller-supplied transcript through normalization, orchestration, five agents, an injected provider, typed output validation, and domain mapping. `AIProcessingService` returns trusted, domain-ready inputs with operation-level failures; it does not retrieve transcripts from storage or persist results. Phase 8 adds a process-local job-submission boundary whose executor delegates to that existing service. Runtime composition now selects only the registered local Ollama model. A fail-closed token-budget gate blocks requests until complete-request counting and effective runtime limits are verified. Deterministic tests use test-only providers and make no network calls. See [model context and token budgeting](./model-context-budgeting.md).
 
 ## Current AI processing boundary (Phase 7)
 
@@ -35,8 +35,9 @@ Caller supplies ProcessingRequest + trusted TranscriptInDB
 ```
 
 Agents receive application input and do not query the database. Provider SDKs
-remain behind the `ModelProvider` protocol; OpenAI is a concrete adapter, while
-tests inject deterministic structured responses. The application supplies
+remain behind the `ModelProvider` protocol; runtime composition uses the local
+Ollama adapter, while tests inject deterministic structured responses. The
+application supplies
 meeting/transcript identity, and model output cannot replace it. Structured
 validation checks shape and types, not whether a claim is semantically true.
 Successful mappings are not automatically written to PostgreSQL. MeetingInsight
@@ -102,9 +103,9 @@ binding ID. `AIProcessingJob.from_authenticated_context()` binds both values
 to the job; substitutions to either the context or its principal are rejected.
 The job has no arbitrary `user_id` input. The executor passes the
 same context to `MeetingServiceTranscriptInputProvider`, which delegates to
-`MeetingService.get_transcript()`. The existing service enforces ownership
-through `require_owned_meeting()` before reading the transcript. The provider
-then verifies the requested transcript ID. A missing context fails the job;
+`MeetingService.get_transcript_revision()`. The service enforces ownership
+through `require_owned_meeting()` and retrieves the immutable transcript row
+whose UUID is bound into the job. A missing context fails the job;
 a different user's context is rejected by the existing ownership check. AI
 services/agents receive no authentication context.
 
@@ -131,15 +132,89 @@ This adapter is process-local only. It does not guarantee durable jobs, retries,
 at-least-once or exactly-once delivery, crash recovery, distributed locking,
 queue persistence, worker concurrency, or dead-letter handling. Pending jobs
 disappear on process exit. The adapter does not add concurrency or retry
-semantics. The existing direct `AIProcessingService` call remains available;
-The Celery adapter introduced in Phase 9.1 is described next; no public job
-endpoint is introduced here.
+semantics. The existing direct `AIProcessingService` call remains available.
+This earlier process-local adapter had no public submission endpoint; the later
+atomic submission contract is described below.
 
 Phase 9's signed producer authorization and worker verification are described
 below. A worker never derives identity from an unsigned queue field; external
 access/refresh credentials, passwords, and provider credentials are excluded
 from the message. Authentication stays outside the AI service, orchestrator,
 and agents.
+
+## Phase 8 atomic meeting submission and transactional outbox
+
+`POST /api/v1/meetings/submit` is authenticated by Gateway and forwarded with
+the existing short-lived, Gateway-signed Meeting Service principal. Meeting
+Service derives the owner from that verified principal and checks the submitted
+organization through `OrganizationAuthorization`.
+
+One PostgreSQL transaction writes the meeting, immutable revision 1 transcript,
+queued `processing_jobs` row, owner/operation/key-scoped idempotency row, and a
+pending `job_outbox_events` row. PostgreSQL transaction-scoped advisory locks
+serialize concurrent uses of the same idempotency scope; a unique index is the
+final invariant. Canonical payload hashing sorts JSON keys, canonicalizes the
+organization UUID and equivalent aware timestamps, and preserves ordered list
+content. A matching replay returns the original receipt; a changed payload
+returns 409. A failed transaction leaves no committed placeholder or outbox
+event. The receipt reveals meeting/transcript IDs and initial queued status,
+not the signed queue message or job internals.
+
+The submission endpoint does not publish to Celery. Its outbox row is visible
+to other transactions only after commit. A one-event relay accepts a committed
+claim, delegates signing and Celery publication to an injected publisher using
+the AI producer's dedicated background-job key, then conditionally acknowledges
+the same live lease in a new transaction. It does not poll or schedule itself.
+The outbox UUID is propagated as a Celery header; the existing job UUID remains
+the task ID and worker lifecycle identity. If broker publication succeeds but
+database acknowledgment fails, the relay raises and the lease can later expire,
+so duplicate delivery is possible and retains the same event/job identities.
+The one-shot runtime commits at most one claim and closes that session before
+calling the relay. Meeting Service exposes an explicit command boundary rather
+than dispatching during API startup or from Worker Service:
+`docker compose exec meeting-service python -m app.outbox_dispatch_once`.
+The command initializes and closes its own Meeting Service database lifecycle,
+then invokes the existing runtime once. It is safe to invoke from a separate
+operator process and does not block the API event loop. There is no poller or
+scheduler. Known transient publication failures release the lease and use
+bounded exponential backoff with a two-second base and a 60-second cap, for at
+most three ordinary claims. An unknown publication outcome is marked before
+the external publication boundary and may receive one separate ambiguity
+recovery claim. If that recovery outcome remains unknown or its lease expires,
+the event stays `pending` with `ambiguous_recovery_exhausted`; permanent
+failures and exhausted ordinary retries also remain visible as `pending` with
+their safe failure category and are excluded from normal claims. Eligible
+transient work requires another explicit one-shot invocation; stopped events
+have no application requeue endpoint and require an authorized, audited
+operator procedure. Direct SQL requeue is unsupported. The claim lease uses
+the existing `PROCESSING_JOB_LEASE_SECONDS` setting. If publication succeeds
+but database acknowledgment fails, the event can be delivered again with the
+same event/job IDs. Delivery is at-least-once, not exactly-once. Live command-
+to-AI/broker verification remains pending.
+
+Outbox publication uses a dedicated RS256 service principal, separate from the
+Gateway's user principal and the AI-to-worker job authorization. Meeting
+Service signs a short-lived assertion with `OUTBOX_PUBLICATION_AUTH_PRIVATE_KEY`
+(`sub`/`iss` `meeting-service`, audience `ai-service:outbox-publication`); AI
+Service verifies it with `OUTBOX_PUBLICATION_AUTH_PUBLIC_KEY`. AI Service alone
+uses `BACKGROUND_JOB_SIGNING_PRIVATE_KEY` to sign the existing worker envelope.
+The publication endpoint accepts only the existing event type and strict job
+envelope, and verifies that request and envelope job IDs match. Duplicate
+requests intentionally remain possible and reuse the persisted event/job IDs.
+
+The trust assumption is that Meeting Service is authorized to request
+publication for persisted outbox data and that service-to-service traffic is
+protected by the deployment network/TLS. The JWT is short-lived but not
+single-use; at-least-once delivery and worker lifecycle idempotency remain the
+replay controls. Provision a dedicated RSA-2048+ key pair in the deployment
+secret manager: mount only the private key in Meeting Service and only its
+matching public key in AI Service. Do not reuse Gateway or job-authorization
+keys. Current configuration accepts one verification key, so rotation requires
+pausing dispatch, replacing both sides as a coordinated deployment, verifying
+the pair, then resuming dispatch. Zero-downtime rotation would require a
+verified-key ring/`kid` contract first. The relay forwards `X-Request-ID` when
+one is supplied; scheduled/manual invocations without a request context rely on
+AI Service middleware to create a correlation ID.
 
 ## Phase 9 Redis/Celery transport and signed job identity
 
@@ -187,11 +262,12 @@ distributed submission/verification cannot proceed.
 The default authorization lifetime is 120 seconds (maximum 300 seconds); the
 worker allows five seconds of clock skew. It is job-bound and cannot authorize
 a different envelope. A captured intact message can still be replayed for the
-same job while valid (including the skew allowance): there is no durable
-job/idempotency store to coordinate one-time consumption. `jti` is unique
-metadata, not replay prevention. Durable replay protection belongs with the
-later persistent job/idempotency system; no process-local cache is claimed as
-distributed protection. Phase 8's process-local adapter remains available.
+same job while valid (including the skew allowance): durable submission
+idempotency prevents duplicate meeting/job creation for a client key, but it
+does not consume a signed envelope's `jti` once. `jti` is unique metadata, not
+replay prevention. Worker lifecycle claims and terminal states make repeated
+delivery of the same job a no-op or defer concurrent execution. Phase 8's
+process-local adapter remains available.
 
 Celery 5.4 and Redis client 5.2 are already declared in `requirements.txt`; no
 dependency was added. Redis is not installed or running in the current local
@@ -247,7 +323,16 @@ failures and unexpected worker execution failures are retryable. Validation,
 authorization, ownership/transcript, malformed-message, and application
 processing failures are terminal. Partial results are persisted with their
 successful operation outputs and sanitized failed-operation details and are
-not retried wholesale.
+not retried wholesale. For a completed or partial result, the worker invokes
+the Meeting Service-owned result persister from inside the same lifecycle
+transaction that locks and completes the `processing_jobs` row. Successful
+mapped outputs append a summary version or create task, decision, follow-up
+draft, and insight rows in their existing tables; failed operations create no
+domain rows. The persisted job result JSON and terminal state commit atomically
+with those rows. A persistence exception rolls back the completion transaction,
+leaving the job recoverable rather than exposing a terminal job with missing
+domain outputs. Existing owner-scoped Meeting Service endpoints expose those
+records; no API response fields or result endpoint are introduced.
 
 Workers use late acknowledgement and reject worker-lost tasks for redelivery.
 An active lease makes duplicate delivery a deferred no-op; terminal delivery
@@ -517,7 +602,7 @@ the meeting and speaker lists are bounded with truncation indicators.
 |---------|----------------|
 | gateway-service | Auth, routing, validation, public API |
 | meeting-service | Meetings, transcripts, summaries, tasks, decisions, follow-up drafts |
-| ai-service | AIProcessingService, transcript normalization, five agents, injected provider abstraction/OpenAI adapter, orchestration, typed validation and domain mapping; no database or persistence side effects |
+| ai-service | AIProcessingService, transcript normalization, five agents, injected provider abstraction/Ollama adapter, exact model registry, fail-closed token-budget gate, orchestration, typed validation and domain mapping; no database or persistence side effects |
 | search-service | Health, deterministic chunking/index preparation, embeddings, Qdrant persistence, and authenticated owner-scoped retrieval |
 | worker-service | Health service plus Celery configuration, trusted job verification, durable Phase 9 lifecycle, and Phase 8 execution runtime |
 
