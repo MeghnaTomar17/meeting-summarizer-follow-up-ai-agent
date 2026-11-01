@@ -18,9 +18,9 @@ class TaskCandidate(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    title: str = Field(min_length=1)
-    description: str | None = None
-    assignee_name: str | None = None
+    title: str = Field(min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=2000)
+    assignee_name: str | None = Field(default=None, max_length=200)
     due_date: date | None = None
 
     @field_validator("title")
@@ -56,7 +56,7 @@ class TaskAgentOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    tasks: list[TaskCandidate]
+    tasks: list[TaskCandidate] = Field(max_length=100)
 
 
 TASK_AGENT_INSTRUCTIONS = (

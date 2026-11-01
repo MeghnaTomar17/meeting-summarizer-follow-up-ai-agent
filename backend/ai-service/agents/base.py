@@ -41,6 +41,7 @@ class Agent(ABC, Generic[TAgentOutput]):
             self._model_provider,
             model_request,
             self.output_model,
+            budget_scope=self.kind.value,
         )
 
 

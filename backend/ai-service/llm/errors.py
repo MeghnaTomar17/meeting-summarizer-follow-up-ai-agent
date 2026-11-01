@@ -32,12 +32,22 @@ class ModelRequestRejectedError(ModelExecutionError):
     safe_message = "The model provider rejected the request."
 
 
+class ModelBudgetUnverifiedError(ModelExecutionError):
+    safe_message = "The model request was blocked because its token budget cannot be verified."
+
+
+class ModelBudgetExceededError(ModelExecutionError):
+    safe_message = "The model request exceeds its verified token budget."
+
+
 class UnexpectedModelProviderError(ModelExecutionError):
     safe_message = "The model provider failed unexpectedly."
 
 
 __all__ = [
     "MalformedModelOutputError",
+    "ModelBudgetExceededError",
+    "ModelBudgetUnverifiedError",
     "ModelExecutionError",
     "ModelProviderUnavailableError",
     "ModelRequestRejectedError",

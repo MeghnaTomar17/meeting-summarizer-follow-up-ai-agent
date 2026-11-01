@@ -17,8 +17,8 @@ class FollowUpRecipient(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    name: str | None = None
-    email: EmailStr | None = None
+    name: str | None = Field(default=None, max_length=200)
+    email: EmailStr | None = Field(default=None, max_length=254)
 
     @field_validator("name")
     @classmethod
@@ -45,9 +45,9 @@ class FollowUpDraft(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    subject: str = Field(min_length=1)
-    body_html: str = Field(min_length=1)
-    recipients: list[FollowUpRecipient]
+    subject: str = Field(min_length=1, max_length=200)
+    body_html: str = Field(min_length=1, max_length=8000)
+    recipients: list[FollowUpRecipient] = Field(max_length=20)
 
     @field_validator("subject", "body_html")
     @classmethod
@@ -62,7 +62,7 @@ class FollowUpAgentOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    followups: list[FollowUpDraft]
+    followups: list[FollowUpDraft] = Field(max_length=20)
 
 
 FOLLOWUP_AGENT_INSTRUCTIONS = (

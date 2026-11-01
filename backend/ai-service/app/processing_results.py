@@ -16,6 +16,8 @@ from agents.task_agent import TaskAgentOutput
 from app.contracts import ProcessingOperation, ProcessingStatus
 from llm.errors import (
     MalformedModelOutputError,
+    ModelBudgetExceededError,
+    ModelBudgetUnverifiedError,
     ModelExecutionError,
     ModelProviderUnavailableError,
     ModelRequestRejectedError,
@@ -48,6 +50,8 @@ class ProcessingErrorCode(StrEnum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     PROVIDER_TIMEOUT = "provider_timeout"
     PROVIDER_REJECTED = "provider_rejected"
+    TOKEN_BUDGET_UNVERIFIED = "token_budget_unverified"
+    TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"
     MALFORMED_OUTPUT = "malformed_output"
     MODEL_EXECUTION_FAILED = "model_execution_failed"
     INVALID_INPUT = "invalid_input"
@@ -232,7 +236,11 @@ class AIProcessingResult(BaseModel):
 
 def failure_for_exception(error: Exception) -> ProcessingFailure:
     """Map known agent/provider failures to safe public codes and messages."""
-    if isinstance(error, ProviderNotConfiguredError):
+    if isinstance(error, ModelBudgetUnverifiedError):
+        code = ProcessingErrorCode.TOKEN_BUDGET_UNVERIFIED
+    elif isinstance(error, ModelBudgetExceededError):
+        code = ProcessingErrorCode.TOKEN_BUDGET_EXCEEDED
+    elif isinstance(error, ProviderNotConfiguredError):
         code = ProcessingErrorCode.PROVIDER_NOT_CONFIGURED
     elif isinstance(error, ModelProviderUnavailableError):
         code = ProcessingErrorCode.PROVIDER_UNAVAILABLE

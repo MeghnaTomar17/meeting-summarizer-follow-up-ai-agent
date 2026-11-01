@@ -17,8 +17,8 @@ class InsightCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     category: InsightCategory
-    title: str = Field(min_length=1)
-    description: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(min_length=1, max_length=2000)
 
     @field_validator("title", "description")
     @classmethod
@@ -33,7 +33,7 @@ class InsightAgentOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    insights: list[InsightCandidate]
+    insights: list[InsightCandidate] = Field(max_length=50)
 
 
 INSIGHT_AGENT_INSTRUCTIONS = (

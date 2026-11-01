@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -17,9 +18,11 @@ class DecisionCandidate(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    statement: str = Field(min_length=1)
-    context: str | None = None
-    participants: list[str] = Field(default_factory=list)
+    statement: str = Field(min_length=1, max_length=1000)
+    context: str | None = Field(default=None, max_length=2000)
+    participants: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=50
+    )
 
     @field_validator("statement")
     @classmethod
@@ -56,7 +59,7 @@ class DecisionAgentOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    decisions: list[DecisionCandidate]
+    decisions: list[DecisionCandidate] = Field(max_length=100)
 
 
 DECISION_AGENT_INSTRUCTIONS = (

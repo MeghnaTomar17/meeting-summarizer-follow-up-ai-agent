@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.contracts import ModelRequest
@@ -15,7 +16,7 @@ class CrossMeetingAnswerOutput(BaseModel):
 
     answer: str = Field(min_length=1, max_length=8000)
     insufficient_evidence: bool
-    evidence_ids: list[str] = Field(max_length=100)
+    evidence_ids: list[Annotated[str, Field(max_length=64)]] = Field(max_length=100)
 
     @field_validator("answer")
     @classmethod

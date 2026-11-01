@@ -88,6 +88,7 @@ class ModelRequest(BaseModel):
     instructions: str = Field(min_length=1)
     input_text: str = Field(min_length=1)
     response_schema: dict[str, JsonValue] | None = None
+    budget_scope: str | None = None
 
 
 class ModelResponse(BaseModel):

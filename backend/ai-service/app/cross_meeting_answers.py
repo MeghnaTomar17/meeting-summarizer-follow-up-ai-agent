@@ -128,7 +128,10 @@ class CrossMeetingAnswerService:
         )
         try:
             generated = await generate_structured_output(
-                self._provider, model_request, CrossMeetingAnswerOutput
+                self._provider,
+                model_request,
+                CrossMeetingAnswerOutput,
+                budget_scope="cross_meeting_answer",
             )
         except ModelExecutionError:
             raise

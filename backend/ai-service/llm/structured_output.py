@@ -23,13 +23,18 @@ async def generate_structured_output(
     provider: ModelProvider | None,
     request: ModelRequest,
     output_model: type[TOutput],
+    *,
+    budget_scope: str | None = None,
 ) -> TOutput:
     """Call the provider and validate its content without exposing raw failures."""
     if provider is None:
         raise ProviderNotConfiguredError()
 
     provider_request = request.model_copy(
-        update={"response_schema": output_model.model_json_schema()}
+        update={
+            "response_schema": output_model.model_json_schema(),
+            "budget_scope": budget_scope or request.budget_scope,
+        }
     )
     try:
         response = await provider.generate(provider_request)

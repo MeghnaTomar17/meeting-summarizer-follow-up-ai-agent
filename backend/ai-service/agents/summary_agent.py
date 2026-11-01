@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -16,8 +17,8 @@ class SummaryAgentOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    content: str = Field(min_length=1)
-    key_topics: list[str]
+    content: str = Field(min_length=1, max_length=8000)
+    key_topics: list[Annotated[str, Field(max_length=120)]] = Field(max_length=20)
 
     @field_validator("content")
     @classmethod
