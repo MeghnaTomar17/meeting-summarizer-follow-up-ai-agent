@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -92,6 +92,9 @@ class ProcessingJobService:
         retry_base_seconds: float = 2.0,
         retry_max_seconds: float = 60.0,
         lease_seconds: int = 960,
+        completed_result_persister: Callable[
+            [AsyncSession, ProcessingJobRecord, dict[str, Any]], Awaitable[None]
+        ] | None = None,
     ) -> None:
         if max_attempts < 1 or retry_base_seconds <= 0 or retry_max_seconds < retry_base_seconds or lease_seconds < 1:
             raise ValueError("Invalid processing job reliability settings.")
@@ -101,6 +104,7 @@ class ProcessingJobService:
         self._retry_base_seconds = retry_base_seconds
         self._retry_max_seconds = retry_max_seconds
         self._lease_seconds = lease_seconds
+        self._completed_result_persister = completed_result_persister
 
     async def register(
         self,
@@ -242,6 +246,8 @@ class ProcessingJobService:
             record = await self._repository.get_by_id(job_id, for_update=True)
             if record is None or record.status != JobStatus.RUNNING.value or record.lease_token != lease_token:
                 return False
+            if self._completed_result_persister is not None:
+                await self._completed_result_persister(self._session, record, result)
             self._transition(record, status)
             record.result = result
             record.completed_at = datetime.now(timezone.utc)
@@ -306,7 +312,7 @@ class ProcessingJobService:
 class PostgresJobLifecycle:
     """Worker-side session adapter; each lifecycle action owns one transaction."""
 
-    def __init__(self, settings) -> None:
+    def __init__(self, settings, *, completed_result_persister=None) -> None:
         engine = create_async_engine(
             settings.database_url,
             pool_pre_ping=True,
@@ -321,10 +327,16 @@ class PostgresJobLifecycle:
             "retry_max_seconds": getattr(settings, "processing_job_retry_max_seconds", 60.0),
             "lease_seconds": getattr(settings, "processing_job_lease_seconds", 960),
         }
+        self._completed_result_persister = completed_result_persister
 
     async def _invoke(self, method: str, *args, **kwargs):
         async with self._sessions() as session:
-            service = ProcessingJobService(session, ProcessingJobRepository(session), **self._options)
+            service = ProcessingJobService(
+                session,
+                ProcessingJobRepository(session),
+                completed_result_persister=self._completed_result_persister,
+                **self._options,
+            )
             return await getattr(service, method)(*args, **kwargs)
 
     async def claim(self, **kwargs) -> ClaimResult:

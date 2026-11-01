@@ -60,7 +60,7 @@ def _load_service_types() -> dict[str, Any]:
                 ),
                 "app.processing_service": ("AIProcessingService",),
                 "agents.orchestrator": ("AIProcessingOrchestrator",),
-                "llm.openai_client": ("OpenAIModelProvider",),
+                "llm.provider_factory": ("create_model_provider",),
             },
         )
         meeting_types = import_from(
@@ -71,6 +71,9 @@ def _load_service_types() -> dict[str, Any]:
                 "app.services.meeting_service": ("MeetingService",),
                 "app.services.transcript_input_provider": (
                     "MeetingServiceTranscriptInputProvider",
+                ),
+                "app.services.processing_result_persistence": (
+                    "persist_processing_result",
                 ),
             },
         )
@@ -124,16 +127,12 @@ class _Phase8ExecutorAdapter:
             await engine.dispose()
 
     async def execute(self, job: Any) -> Any:
+        provider = self._types["create_model_provider"](self._ai_settings)
         engine = create_async_engine(
             self._settings.database_url,
             pool_pre_ping=True,
             echo=self._settings.database_echo,
             poolclass=NullPool,
-        )
-        provider = self._types["OpenAIModelProvider"](
-            api_key=self._ai_settings.openai_api_key,
-            model=self._ai_settings.openai_model,
-            timeout_seconds=self._ai_settings.openai_timeout_seconds,
         )
         session_factory = async_sessionmaker(
             engine, expire_on_commit=False, class_=AsyncSession
@@ -188,7 +187,12 @@ def create_worker_job_runtime(settings: WorkerSettings) -> object:
         {
             "executor": executor,
             "authorize_target": executor.authorize_target,
-            "lifecycle": PostgresJobLifecycle(settings),
+            "lifecycle": PostgresJobLifecycle(
+                settings,
+                completed_result_persister=service_types[
+                    "persist_processing_result"
+                ],
+            ),
             "verification_key": public_key or "",
             "authorization_issuer": settings.background_job_issuer,
             "authorization_audience": settings.background_job_audience,
